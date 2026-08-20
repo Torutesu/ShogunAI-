@@ -18,12 +18,12 @@ const en = {
     langLabel: 'Language',
   },
   hero: {
-    badge: 'One memory. Every model.',
+    badge: 'On your machine. On your own plan.',
     invitedBy: (who: string) => `${who} invited you`,
     invitedTier: (label: string) => ` · they’re on ${label}`,
-    lineA: 'Your own general intelligence.',
-    lineB: 'It acts.',
-    sub: 'Frontier models are brilliant and know nothing about you. ShogunAI supplies the missing half: a private memory of your real workday, held on your Mac, and an execution layer that turns it into finished work inside the tools you already use.',
+    lineA: 'Your personal AGI',
+    lineB: 'on your PC.',
+    sub: 'Built to finish real work. Frontier models know nothing about you — ShogunAI keeps a private memory of your workday on your Mac and acts on it: replies written at your cursor, meetings turned into minutes, loose ends closed. Anything that reaches another person waits for your approval.',
     mockToday: 'TODAY · THURSDAY',
     mockHeading: 'Your day, already understood',
     mockLive: 'Live capture',
@@ -108,7 +108,7 @@ const en = {
       { name: 'Capture', items: [
         { k: 'Text through the accessibility layer', v: 'The focused window\u2019s app, title, and visible text, read the way a screen reader reads it.', r: 'Excluded apps, private windows and password fields are never read. Pause stops it entirely.' },
         { k: 'Visual recall', v: 'A compressed screenshot, only where text capture returns nothing at all.', r: 'Off until you turn it on. Encrypted on the Mac, deleted automatically at the retention age you pick.' },
-        { k: 'Meeting audio', v: 'Processed for the transcript while the meeting runs.', r: 'Never written to disk or a temp file. Only the transcript persists.' },
+        { k: 'Meeting audio', v: 'Streamed to a speech service for live transcription while the meeting runs, and never used to train anyone\u2019s models.', r: 'Never written to disk or a temp file. Only the transcript persists, and the traceability log records the egress.' },
       ] },
       { name: 'Recall', items: [
         { k: 'One question across every tool', v: 'Mail, chat, docs and calendar answered from a single search.', r: 'Every hit carries its source and time, so an answer can be checked rather than trusted.' },
@@ -483,12 +483,12 @@ const ja: Dictionary = {
     langLabel: '言語',
   },
   hero: {
-    badge: 'ひとつの記憶を、すべてのモデルへ。',
+    badge: 'あなたの端末で、あなたのプランで動きます。',
     invitedBy: (who: string) => `${who} さんからの招待`,
     invitedTier: (label: string) => ` · ${label} を利用中`,
-    lineA: 'あなたの汎用知能。',
-    lineB: 'そして、動く。',
-    sub: '最先端のモデルは賢く、そしてあなたを何も知りません。ShogunAI は足りない半分を渡します ── あなたの実際の一日の記憶を Mac の中に持ち、それを、いま使っているツールの中で終わった仕事に変える実行レイヤーを。',
+    lineA: 'あなたのPCに、',
+    lineB: 'あなただけのAGI。',
+    sub: '仕事を終わらせるために作りました。最先端のモデルはあなたのことを何も知りません。ShogunAI はあなたの一日の記憶を Mac の中に持ち、その記憶で動きます ── カーソルの位置に返信を書き、会議を議事録に変え、やり残しを片づける。人に届くものだけは、あなたの承認を待ちます。',
     mockToday: '今日 · 木曜',
     mockHeading: '一日は、もう把握されている',
     mockLive: 'ライブ記録',
@@ -573,7 +573,7 @@ const ja: Dictionary = {
       { name: 'キャプチャ', items: [
         { k: 'アクセシビリティ経由のテキスト', v: 'フォーカス中のウィンドウのアプリ名・タイトル・可視テキストを、スクリーンリーダーと同じ読み方で取得します。', r: '除外アプリ、プライベートウィンドウ、パスワード欄は読みません。一時停止で完全に止まります。' },
         { k: 'ビジュアルリコール', v: 'テキストが一切取れなかったウィンドウにかぎり、圧縮したスクリーンショットを取得します。', r: '既定オフ。Mac 上で暗号化し、選んだ保持期間で自動削除します。' },
-        { k: '会議の音声', v: '会議中に、文字起こしのためだけに処理します。', r: 'ディスクにも一時ファイルにも書きません。残るのは文字起こしだけです。' },
+        { k: '会議の音声', v: '会議中、ライブ文字起こしのために音声認識サービスへ送ります。学習や改善には使われません。', r: 'ディスクにも一時ファイルにも書きません。残るのは文字起こしだけで、外部送信はトレーサビリティのログに記録されます。' },
       ] },
       { name: '想起', items: [
         { k: 'ツール横断の検索', v: 'メール、チャット、ドキュメント、カレンダーを一度の問いで。', r: 'ヒットごとに出どころと時刻が付きます。信じるのではなく確かめられます。' },
@@ -945,12 +945,12 @@ const es: Dictionary = {
     langLabel: 'Idioma',
   },
   hero: {
-    badge: 'Una memoria. Todos los modelos.',
+    badge: 'En tu máquina. Con tu propio plan.',
     invitedBy: (who: string) => `${who} te invitó`,
     invitedTier: (label: string) => ` · tiene ${label}`,
-    lineA: 'Tu inteligencia general.',
-    lineB: 'Y actúa.',
-    sub: 'Los modelos de frontera son brillantes y no saben nada de ti. ShogunAI aporta la mitad que falta: una memoria privada de tu jornada real, guardada en tu Mac, y una capa de ejecución que la convierte en trabajo terminado dentro de las herramientas que ya usas.',
+    lineA: 'Tu AGI personal',
+    lineB: 'en tu PC.',
+    sub: 'Hecha para terminar el trabajo. Los modelos de frontera no saben nada de ti: ShogunAI guarda en tu Mac una memoria privada de tu jornada y actúa sobre ella — respuestas escritas en tu cursor, reuniones convertidas en actas, cabos sueltos cerrados. Todo lo que llega a otra persona espera tu aprobación.',
     mockToday: 'HOY · JUEVES',
     mockHeading: 'Tu día, ya entendido',
     mockLive: 'Captura en vivo',
@@ -1035,7 +1035,7 @@ const es: Dictionary = {
       { name: 'Captura', items: [
         { k: 'Text through the accessibility layer', v: 'The focused window\u2019s app, title, and visible text, read the way a screen reader reads it.', r: 'Excluded apps, private windows and password fields are never read. Pause stops it entirely.' },
         { k: 'Visual recall', v: 'A compressed screenshot, only where text capture returns nothing at all.', r: 'Off until you turn it on. Encrypted on the Mac, deleted automatically at the retention age you pick.' },
-        { k: 'Meeting audio', v: 'Processed for the transcript while the meeting runs.', r: 'Never written to disk or a temp file. Only the transcript persists.' },
+        { k: 'Meeting audio', v: 'Streamed to a speech service for live transcription while the meeting runs, and never used to train anyone\u2019s models.', r: 'Never written to disk or a temp file. Only the transcript persists, and the traceability log records the egress.' },
       ] },
       { name: 'Recuperación', items: [
         { k: 'One question across every tool', v: 'Mail, chat, docs and calendar answered from a single search.', r: 'Every hit carries its source and time, so an answer can be checked rather than trusted.' },
@@ -1379,12 +1379,12 @@ const de: Dictionary = {
     langLabel: 'Sprache',
   },
   hero: {
-    badge: 'Ein Gedächtnis. Jedes Modell.',
+    badge: 'Auf deinem Rechner. Mit deinem eigenen Plan.',
     invitedBy: (who: string) => `${who} hat dich eingeladen`,
     invitedTier: (label: string) => ` · nutzt ${label}`,
-    lineA: 'Deine allgemeine Intelligenz.',
-    lineB: 'Sie handelt.',
-    sub: 'Spitzenmodelle sind brillant und wissen nichts über dich. ShogunAI liefert die fehlende Hälfte: ein privates Gedächtnis deines echten Arbeitstags auf deinem Mac und eine Ausführungsebene, die daraus fertige Arbeit in den Werkzeugen macht, die du ohnehin nutzt.',
+    lineA: 'Deine persönliche',
+    lineB: 'AGI auf deinem PC.',
+    sub: 'Gebaut, um Arbeit zu Ende zu bringen. Spitzenmodelle wissen nichts über dich: ShogunAI hält ein privates Gedächtnis deines Arbeitstags auf deinem Mac und handelt danach — Antworten an deinem Cursor, Meetings als Protokoll, offene Enden geschlossen. Alles, was andere erreicht, wartet auf deine Freigabe.',
     mockToday: 'HEUTE · DONNERSTAG',
     mockHeading: 'Dein Tag, bereits verstanden',
     mockLive: 'Live-Erfassung',
@@ -1469,7 +1469,7 @@ const de: Dictionary = {
       { name: 'Erfassung', items: [
         { k: 'Text through the accessibility layer', v: 'The focused window\u2019s app, title, and visible text, read the way a screen reader reads it.', r: 'Excluded apps, private windows and password fields are never read. Pause stops it entirely.' },
         { k: 'Visual recall', v: 'A compressed screenshot, only where text capture returns nothing at all.', r: 'Off until you turn it on. Encrypted on the Mac, deleted automatically at the retention age you pick.' },
-        { k: 'Meeting audio', v: 'Processed for the transcript while the meeting runs.', r: 'Never written to disk or a temp file. Only the transcript persists.' },
+        { k: 'Meeting audio', v: 'Streamed to a speech service for live transcription while the meeting runs, and never used to train anyone\u2019s models.', r: 'Never written to disk or a temp file. Only the transcript persists, and the traceability log records the egress.' },
       ] },
       { name: 'Abruf', items: [
         { k: 'One question across every tool', v: 'Mail, chat, docs and calendar answered from a single search.', r: 'Every hit carries its source and time, so an answer can be checked rather than trusted.' },

@@ -35,6 +35,16 @@ pub fn set_voice_dictionary_egress_consent(consent: bool, app: AppHandle) -> Res
     self::consent::set_voice_dictionary_egress_consent(consent, app)
 }
 
+#[tauri::command(async)]
+pub fn get_voice_microphones() -> Result<Vec<String>, String> {
+    consent::get_voice_microphones()
+}
+
+#[tauri::command]
+pub fn set_voice_microphone(microphone: Option<String>, app: AppHandle) -> Result<(), String> {
+    consent::set_voice_microphone(microphone, app)
+}
+
 #[tauri::command]
 pub fn voice_dismiss(app: AppHandle) {
     lifecycle::voice_dismiss(app)

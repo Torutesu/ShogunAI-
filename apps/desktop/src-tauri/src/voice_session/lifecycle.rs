@@ -213,7 +213,7 @@ pub fn on_hold_start(app: AppHandle) -> bool {
         }
     };
     let context = dictionary::dictionary_context(target.as_deref());
-    let (session, allow_personal_dictionary_keyterms) = {
+    let (session, allow_personal_dictionary_keyterms, microphone) = {
         let mut lane = match LANE.lock() {
             Ok(lane) => lane,
             Err(_) => return false,
@@ -240,11 +240,17 @@ pub fn on_hold_start(app: AppHandle) -> bool {
         (
             id,
             lane.settings.share_personal_dictionary_with_speech_provider,
+            lane.settings.microphone.clone(),
         )
     };
     // Before mic opens: own capture cannot hear cue, and meeting recording blocks this path.
     crate::sound::mac::play(shogun_core::sound::Cue::VoiceStart);
-    let handle = match crate::voice_lane::start(&app, context, allow_personal_dictionary_keyterms) {
+    let handle = match crate::voice_lane::start(
+        &app,
+        context,
+        allow_personal_dictionary_keyterms,
+        microphone.as_deref(),
+    ) {
         Ok(handle) => handle,
         Err(error) => {
             let _ = complete_terminal(session, SessionPhase::Opening, || emit_error(&app, error));

@@ -34,7 +34,7 @@ export const featurePages: readonly MarketingDetail[] = [
     outcomes: ['Recover the reasoning behind a decision weeks later', 'Find the source of a number instead of re-deriving it', 'Return to interrupted work without rebuilding the story', 'Keep sensitive context on the device by default'],
     faq: [
       ['Does ShogunAI take screenshots?', 'Only where text capture returns nothing, and only if you switch visual recall on — it is off by default. Those screenshots stay encrypted on your Mac, can be viewed or deleted at any time, and are deleted automatically at the retention age you pick. Everywhere else, capture is text through the accessibility layer and no image is written.'],
-      ['Is meeting audio stored?', 'No. Audio is processed for the transcript while a meeting runs and is never written to disk or a temp file. What persists is the transcript text and where it came from.'],
+      ['Is meeting audio stored?', 'No. Audio streams to a speech service for live transcription while a meeting runs, is never used to train anyone\u2019s models, and is never written to disk or a temp file. What persists is the transcript text and where it came from, and the traceability log records the egress.'],
       ['Where does memory live?', 'In an encrypted database on your Mac. There is no server-side copy of your day to seize, breach, or quietly train on. What leaves the device is the specific slice a request needs, logged with its purpose.'],
       ['Does a heavy day cost more?', 'No. Embeddings run locally, so indexing is free whatever the volume, and recall works offline.'],
     ],
@@ -145,16 +145,16 @@ export const useCasePages: readonly MarketingDetail[] = [
     description: 'Keep client-specific context separate, prepare faster, and create follow-ups grounded in the work already completed.',
     intro: 'Client work demands rapid switching between companies, people, terminology, and commitments. ShogunAI helps you recover the right context before a call and turn it into deliverables afterward.',
     highlights: [
-      { title: 'Client recall', body: 'Retrieve prior conversations, constraints, deliverables, and unresolved questions by client or project.' },
-      { title: 'Meeting preparation', body: 'Create a focused briefing from recent work instead of scanning every message and document.' },
-      { title: 'Consistent follow-up', body: 'Draft summaries and next steps grounded in what was actually discussed.' },
+      { title: 'Sales professionals', body: 'Turn pricing feedback from today’s call and technical requirements from last month into a client-ready proposal without rebuilding the context.' },
+      { title: 'Consultants', body: 'Create a project plan from the scope, kickoff feedback, and discovery notes already in your work history.' },
+      { title: 'Account managers', body: 'Recall the last client touchpoint, open request, and owner across your team without digging through every system.' },
     ],
     steps: [
       { title: 'Build private client memory', body: 'Capture the context you need while keeping your personal work layer local-first.' },
       { title: 'Prepare before the call', body: 'Recall recent changes, commitments, and open decisions in one query.' },
       { title: 'Deliver after the call', body: 'Create a clear recap, plan, or client-ready draft and approve it before sending.' },
     ],
-    outcomes: ['Switch clients with less mental overhead', 'Create better meeting briefs', 'Reduce missed commitments', 'Draft recaps and proposals faster'],
+    outcomes: ['End the hunt for client context scattered across inboxes, documents, meetings, and notes', 'Prepare proposals, follow-ups, and reports from context you already have', 'Stay present in client calls while ShogunAI keeps the thread', 'Switch between clients with less mental overhead', 'Keep private client context local by default and control what is shared'],
     faq: [
       ['Can I keep different client contexts separate?', 'ShogunAI is designed around controlled, searchable work context. You decide what is captured and which connected services are authorized.'],
       ['Will it send client emails automatically?', 'Consequential actions use approval gates, so you can review a client-facing message before it is sent.'],

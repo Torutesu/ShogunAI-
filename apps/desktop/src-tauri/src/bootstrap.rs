@@ -172,6 +172,8 @@ pub fn run() {
             voice_session::mac::get_voice_settings,
             voice_session::mac::set_voice_enabled,
             voice_session::mac::set_voice_dictionary_egress_consent,
+            voice_session::mac::get_voice_microphones,
+            voice_session::mac::set_voice_microphone,
             voice_session::mac::voice_dismiss,
             voice_session::mac::voice_force_end,
             voice_session::mac::get_voice_edit_settings,

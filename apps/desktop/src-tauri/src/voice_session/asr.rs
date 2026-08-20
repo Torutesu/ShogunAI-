@@ -26,8 +26,8 @@ pub(super) fn preload_asr_bg(app: &AppHandle) {
 
 /// Prompt only from the explicit Settings action, never from the UI thread. The probe opens and
 /// immediately stops a local stream; it does not retain or send audio.
-pub(super) fn request_microphone_access_bg() {
-    std::thread::spawn(|| match crate::voice_lane::request_microphone_access() {
+pub(super) fn request_microphone_access_bg(microphone: Option<String>) {
+    std::thread::spawn(move || match crate::voice_lane::request_microphone_access(microphone.as_deref()) {
         Ok(()) => eprintln!("[voice] microphone access ready"),
         Err(error) => eprintln!("[voice] microphone access unavailable: {error}"),
     });

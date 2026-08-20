@@ -334,8 +334,9 @@ fn flush_chunk(live: &mut DeepgramLive, pending: &mut Vec<f32>) {
 
 /// Ask macOS for microphone access while the user is visibly enabling Voice. The stream is
 /// stopped immediately; no captured samples are retained, persisted, or sent to an ASR provider.
-pub fn request_microphone_access() -> Result<(), String> {
-    let mut mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
+pub fn request_microphone_access(selected_device: Option<&str>) -> Result<(), String> {
+    let mut mic = Mic::open_with_device(selected_device)
+        .map_err(|e| format!("microphone unavailable: {e}"))?;
     mic.stop();
     Ok(())
 }
@@ -348,8 +349,10 @@ pub fn start(
     app: &AppHandle,
     context: shogun_core::voice_dictionary::DictionaryContext,
     allow_personal_dictionary_keyterms: bool,
+    selected_device: Option<&str>,
 ) -> Result<Handle, String> {
-    let mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
+    let mic = Mic::open_with_device(selected_device)
+        .map_err(|e| format!("microphone unavailable: {e}"))?;
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
     let app_handle = app.clone();

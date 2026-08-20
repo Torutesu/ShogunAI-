@@ -2811,6 +2811,11 @@ export function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [sharePersonalVocabulary, setSharePersonalVocabulary] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [microphone, setMicrophone] = useState<string | null>(null);
+  const [microphones, setMicrophones] = useState<string[]>([]);
+  const [microphonesLoaded, setMicrophonesLoaded] = useState(false);
+  const [microphoneBusy, setMicrophoneBusy] = useState(false);
+  const [microphoneError, setMicrophoneError] = useState("");
   const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
   const [editKeyInput, setEditKeyInput] = useState("");
   const [editBusy, setEditBusy] = useState(false);
@@ -2845,11 +2850,22 @@ export function VoiceSection(): JSX.Element {
       });
   }, []);
 
+  const loadMicrophones = useCallback((): void => {
+    if (!IN_TAURI || microphonesLoaded) return;
+    void invoke<string[]>("get_voice_microphones")
+      .then((devices) => {
+        setMicrophones(devices);
+        setMicrophonesLoaded(true);
+      })
+      .catch(() => setMicrophoneError(t.voiceMicrophoneUnavailable));
+  }, [microphonesLoaded]);
+
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean; share_personal_dictionary_with_speech_provider: boolean }>("get_voice_settings")
+    void invoke<{ enabled: boolean; microphone?: string | null; share_personal_dictionary_with_speech_provider: boolean }>("get_voice_settings")
       .then((s) => {
         setOn(s.enabled);
+        setMicrophone(s.microphone ?? null);
         setSharePersonalVocabulary(s.share_personal_dictionary_with_speech_provider);
       })
       .catch(() => undefined);
@@ -2869,6 +2885,21 @@ export function VoiceSection(): JSX.Element {
     void invoke("set_voice_enabled", { enabled: next })
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
+  };
+
+  const selectMicrophone = (next: string): void => {
+    const selected = next || null;
+    const previous = microphone;
+    setMicrophone(selected);
+    setMicrophoneError("");
+    if (!IN_TAURI) return;
+    setMicrophoneBusy(true);
+    void invoke("set_voice_microphone", { microphone: selected })
+      .catch(() => {
+        setMicrophone(previous);
+        setMicrophoneError(t.voiceMicrophoneSaveFailed);
+      })
+      .finally(() => setMicrophoneBusy(false));
   };
 
   const setPersonalVocabularyEgress = (next: boolean): void => {
@@ -3009,6 +3040,25 @@ export function VoiceSection(): JSX.Element {
         >
           {t.voiceOn}
         </button>
+      </div>
+      <div className="mic-picker">
+        <label className="set__sublabel" htmlFor="voice-microphone">{t.voiceMicrophone}</label>
+        <select
+          id="voice-microphone"
+          className="mic-picker__control"
+          value={microphone ?? ""}
+          disabled={microphoneBusy}
+          onFocus={loadMicrophones}
+          onChange={(event) => selectMicrophone(event.target.value)}
+        >
+          <option value="">{t.voiceMicrophoneDefault}</option>
+          {microphone && !microphones.includes(microphone) ? (
+            <option value={microphone}>{t.voiceMicrophoneDisconnected(microphone)}</option>
+          ) : null}
+          {microphones.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+        <p className="set__hint set__hint--quiet">{t.voiceMicrophoneHint}</p>
+        {microphoneError ? <p className="set__hint is-err">{microphoneError}</p> : null}
       </div>
       <div className="set__stack set__stack--key">
         <div className="set__label">{t.voiceEditModel}</div>

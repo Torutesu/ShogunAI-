@@ -430,6 +430,24 @@
   align-items: center;
 }
 .voice-vocab__actions .keyrow__btn { white-space: nowrap; }
+.mic-picker {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.mic-picker__control {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+.mic-picker__control:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 560px) {
   .voice-vocab__advanced-grid { grid-template-columns: 1fr; }
 }
