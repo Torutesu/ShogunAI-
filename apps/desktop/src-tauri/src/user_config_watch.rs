@@ -4,9 +4,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+#[cfg(target_os = "macos")]
+use shogun_core::daemon::Db;
 use shogun_core::user_config::{
-    default_path, load_or_create, load_report, render_directives, ParseReport, SectionError,
-    ShougunConfig,
+    default_path, load_or_create, load_report, ParseReport, SectionError, ShougunConfig,
 };
 
 /// フロントに公開する設定状態。
@@ -16,11 +17,12 @@ pub struct UserConfigState {
 }
 
 impl UserConfigState {
-    /// 現在の設定から directives 文字列を得る。
-    pub fn directives(&self) -> String {
+    /// Standing prompt for drafts and chat: Shougun.md plus active lessons (issue #104).
+    #[cfg(target_os = "macos")]
+    pub fn directives_for_generation(&self, db: &Db) -> String {
         self.cfg
             .read()
-            .map(|c| render_directives(&c))
+            .map(|c| db.generation_directives(&c))
             .unwrap_or_default()
     }
 }
@@ -147,4 +149,35 @@ pub fn regenerate_shougun_md(state: tauri::State<'_, UserConfigState>) -> Result
         *w = cfg;
     }
     Ok(())
+}
+
+/// One row on the Personalization Learned list (same rows as `lessons.list`). Instruction and
+/// bookkeeping only — never feedback text.
+#[cfg(target_os = "macos")]
+#[derive(serde::Serialize)]
+pub struct LearnedLessonRow {
+    pub id: i64,
+    pub instruction: String,
+    pub evidence_count: i64,
+    pub active: bool,
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn list_learned_lessons(db: tauri::State<'_, Db>) -> Vec<LearnedLessonRow> {
+    db.lessons_all()
+        .into_iter()
+        .map(|l| LearnedLessonRow {
+            id: l.id,
+            instruction: l.instruction,
+            evidence_count: l.evidence_count,
+            active: l.active,
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn set_learned_lesson_active(id: i64, active: bool, db: tauri::State<'_, Db>) -> bool {
+    db.set_lesson_active(id, active)
 }

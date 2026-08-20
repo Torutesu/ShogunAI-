@@ -2795,6 +2795,16 @@ impl Db {
             Ok::<_, rusqlite::Error>(crate::metrics::LessonCounters {
                 active_lessons: lessons::count_active_lessons(conn)?,
                 feedback_events_last_7d: lessons::count_feedback_since(conn, now - WEEK_MS)?,
+                edit_before_approve_last_7d: lessons::count_feedback_kind_since(
+                    conn,
+                    lessons::FeedbackKind::EditBeforeApprove,
+                    now - WEEK_MS,
+                )?,
+                approve_unchanged_last_7d: lessons::count_feedback_kind_since(
+                    conn,
+                    lessons::FeedbackKind::ApproveUnchanged,
+                    now - WEEK_MS,
+                )?,
             })
         })
         .ok()
@@ -2854,6 +2864,11 @@ impl Db {
                 confidence: l.confidence,
             })
             .collect()
+    }
+
+    /// File directives plus active lessons — the standing generation prompt (issue #104 / Plan D-5a).
+    pub fn generation_directives(&self, cfg: &crate::user_config::ShougunConfig) -> String {
+        crate::user_config::render_directives_with_lessons(cfg, &self.learned_lessons(LESSON_TOP_K))
     }
 
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
@@ -4756,6 +4771,45 @@ mod tests {
         // Fire-and-forget shape: the wrapper returns Option, never Err — an approval action can
         // discard it with `let _ =` and can never be failed by it.
         let _: Option<i64> = id;
+    }
+
+    #[test]
+    fn generation_directives_include_active_lessons_not_feedback_text() {
+        use shogun_memory::lessons::{distill, FeedbackKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        const SECRET: &str = "SECRET_FEEDBACK_BODY_q1";
+        for i in 0..3 {
+            let before = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker.\nBest, Taro"
+            );
+            let after = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker."
+            );
+            db.record_feedback(
+                FeedbackKind::EditBeforeApprove,
+                LessonScope::Global,
+                &NewFeedback {
+                    ts_ms: i,
+                    action_kind: Some("draft_reply"),
+                    before_text: Some(&before),
+                    after_text: Some(&after),
+                    ..Default::default()
+                },
+            );
+        }
+        let candidates = distill(&db.feedback_after(0));
+        assert_eq!(candidates.len(), 1);
+        db.upsert_lesson(&candidates[0], 100).expect("lesson persists");
+
+        let text = db.generation_directives(&crate::user_config::ShougunConfig::default());
+        assert!(text.contains("## Learned (auto)"), "{text}");
+        assert!(text.contains("Best, Taro"), "the distilled closing-line rule is injected");
+        assert!(!text.contains(SECRET), "feedback bodies never ride the prompt");
+        assert!(
+            text.contains("never change which actions need confirmation"),
+            "permission disclaimer stays in the learned section: {text}"
+        );
     }
 
     #[test]

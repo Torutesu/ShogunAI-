@@ -346,7 +346,7 @@ pub mod mac {
         let queue = queue.inner().clone();
         let directives = app
             .try_state::<crate::user_config_watch::UserConfigState>()
-            .map(|s| s.directives())
+            .map(|s| s.directives_for_generation(&db))
             .unwrap_or_default();
         let screen = current_screen();
         std::thread::spawn(move || {

@@ -364,7 +364,7 @@ pub mod mac {
         // thread only") — a sync command would freeze the whole AppKit main thread for it.
         let queue = state.inner().clone();
         let db = db.inner().clone();
-        let directives = user_cfg.directives();
+        let directives = user_cfg.directives_for_generation(&db);
         tauri::async_runtime::spawn_blocking(move || {
             draft_and_enqueue(
                 Draft {

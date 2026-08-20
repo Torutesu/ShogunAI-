@@ -289,6 +289,12 @@ export const STRINGS = {
       `Couldn't read it — check ${section || "the file"}, line ${line}`,
     personalizationOpen: "Open in editor",
     personalizationReset: "Start from a sample",
+    learnedTitle: "Learned",
+    learnedHint:
+      "From edits you made before sending. These shape drafts only — they never change what needs confirmation.",
+    learnedEmpty: "Nothing learned yet. Edit a draft before you send and patterns show up here.",
+    learnedEvidence: (n: number): string => (n === 1 ? "1 correction" : `${n} corrections`),
+    learnedToggle: "Use this lesson",
     voiceTitle: "Voice",
     voiceSection: "Voice dialogue",
     voiceHint: "Hold the shortcut, speak, release — on-device speech into the focused field (or clipboard). Beta; off by default.",
