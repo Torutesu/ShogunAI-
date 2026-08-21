@@ -1,17 +1,17 @@
-# Design QA — Execution layer UI
+# Design QA — Memory layer simplification
 
 ## Evidence
 
-- Source visual: `/var/folders/73/8h5shzqn3nj4zmn32ntdtp6c0000gn/T/TemporaryItems/NSIRD_screencaptureui_V9jRBW/スクリーンショット 2026-08-21 11.30.07.png`
-- Source size: 2724 × 1234
-- Implementation capture: `/tmp/shogun-action-prod-desktop-final.png`
-- Implementation size: 1280 × 720 at desktop viewport, device scale factor 1
-- Side-by-side comparison: `/tmp/shogun-action-qa-comparison.png`
-- State: Japanese locale, light theme, `#action`
+- Source visual: `/var/folders/73/8h5shzqn3nj4zmn32ntdtp6c0000gn/T/TemporaryItems/NSIRD_screencaptureui_d01vrJ/スクリーンショット 2026-08-21 12.09.01.png`
+- Source size: 2890 × 1388
+- Implementation capture: `/tmp/shogun-memory-desktop-final.png`
+- Implementation size: 1280 × 720, device scale factor 1
+- Side-by-side comparison: `/tmp/shogun-memory-qa-comparison.png`
+- State: Japanese locale, light theme, `#memory`
 
 ## Intentional change
 
-The source used a text-heavy before/after comparison. The implementation replaces it with an execution-console UI so the user can understand the workflow visually: three real context sources are matched, a Gmail follow-up draft is prepared, an attachment is included, and sending is blocked until approval.
+The source used a long implementation explanation, three sentence-length bullets, and a search-results card. The implementation reduces the message to one outcome and replaces the search card with a visible three-step product flow: work is seen across real apps, saved as a sourced memory, and recalled through a plain-language question.
 
 ## Visual review
 
@@ -20,21 +20,21 @@ The source used a text-heavy before/after comparison. The implementation replace
 - P2: none
 - P3: none blocking handoff
 
-The new console follows the existing section width, border, radius, shadow, type scale, accent colors, and theme tokens. The Gmail, Notion, and Google Calendar marks use the repository's real brand assets. The console and explanatory copy remain balanced at desktop sizes.
+The simplified section preserves the existing page grid, spacing, typography, color tokens, border radii, and card treatment. Gmail, Notion, and Google Calendar use the repository's real brand assets. The information hierarchy is now readable without relying on the supporting paragraph.
 
 ## Responsive and state checks
 
-- Mobile 390 × 844: no document or card overflow; source list and draft stack cleanly.
-- Desktop 1440: no document or card overflow; console width 576 and height 450 across EN, JA, ES, and DE.
-- Dark mode: themed panels, borders, text, and controls retain readable contrast.
-- Interaction: review control navigates to `#get-started`.
-- Production-mode browser console: no errors or warnings.
+- Desktop 1280: no document overflow; memory flow card is 576 px wide and 547 px tall.
+- EN, JA, ES, and DE at desktop width: identical card bounds and no horizontal overflow.
+- Dark mode: section background, cards, borders, labels, and brand marks retain readable contrast.
+- The single-column mobile breakpoint and compact three-source grid were reviewed in the implementation; the selected in-app browser did not expose viewport resizing for a separate mobile capture in this run.
+- Interaction: the memory CTA navigates to the localized `/features/ai-memory` page.
 
 ## Iteration history
 
-1. Replaced the comparison slider and prose blocks with a realistic execution console.
-2. Added localized UI copy for EN, JA, ES, and DE.
-3. Verified all three brand assets load after lazy-loading settles.
-4. Tightened breakpoint behavior so the section does not become cramped at tablet widths.
+1. Replaced the text-heavy result card with a three-step memory flow.
+2. Reduced the body and bullets to short outcome-oriented copy in all four locales.
+3. Shortened the Japanese headline to avoid an awkward three-line wrap.
+4. Verified real source logos, light and dark themes, localized layouts, and the detail CTA.
 
 final result: passed
