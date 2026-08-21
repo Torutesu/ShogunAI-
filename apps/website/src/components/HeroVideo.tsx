@@ -104,17 +104,13 @@ export function HeroVideo({ label }: { label: string }) {
           }
         }}
         playsInline
-        poster="/optimized/shogunheromac1200-closed-stable.png"
+        poster="/optimized/shogunheromac-v2-poster.png"
         preload="metadata"
         tabIndex={-1}
         width={1200}
         height={904}
       >
-        <source
-          src="/optimized/shogunheromac1200-opening-static.mov"
-          type='video/quicktime; codecs="hvc1"'
-        />
-        <source src="/optimized/shogunheromac1200-opening-static.webm" type="video/webm" />
+        <source src="/optimized/shogunheromac-v2.mp4" type="video/mp4" />
       </video>
     </div>
   );
