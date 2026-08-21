@@ -1096,7 +1096,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
         <div className="container-x relative">
           <div className="max-w-[900px]">
             <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.heroEyebrow}</p>
-            <h1 className="text-ink mt-6 max-w-[19ch] font-sans text-[clamp(44px,5.4vw,72px)] leading-[1.02] font-semibold tracking-[-0.055em] text-balance">
+            <h1 className="text-ink mt-6 max-w-[19ch] font-sans text-[clamp(30px,7.6vw,44px)] leading-[1.08] md:text-[clamp(44px,5.4vw,72px)] md:leading-[1.02] font-semibold tracking-[-0.055em] text-balance">
               {copy.heroTitle}{' '}
               <span className="inline-block bg-[linear-gradient(95deg,#25252b_5%,#8b8b94_65%,#b0b0b8)] bg-clip-text text-transparent [html[data-theme='dark']_&]:bg-[linear-gradient(95deg,#ffffff_5%,#a8a8b5_75%)] [html[data-theme='dark']_&]:bg-clip-text">
                 {copy.heroAccent}
@@ -1128,7 +1128,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
         <div className="container-x">
           <div className="mx-auto max-w-[940px] text-center">
             <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.comparisonEyebrow}</p>
-            <h2 className="text-ink mt-5 font-sans text-[clamp(38px,5.3vw,68px)] leading-[1.06] font-semibold tracking-[-0.06em] text-balance [word-break:keep-all]">
+            <h2 className="text-ink mt-5 font-sans text-[clamp(27px,7vw,38px)] md:text-[clamp(38px,5.3vw,68px)] leading-[1.06] font-semibold tracking-[-0.06em] text-balance [word-break:keep-all]">
               {copy.comparisonTitle}
             </h2>
             <p className="text-muted mx-auto mt-6 max-w-[760px] text-[clamp(16px,1.35vw,19px)] leading-[1.65]">
@@ -1152,7 +1152,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
         <div className="container-x">
           <div className="mx-auto max-w-[920px] text-center">
             <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.featuresEyebrow}</p>
-            <h2 className="text-ink mt-5 font-sans text-[clamp(38px,5.2vw,66px)] leading-[1] font-semibold tracking-[-0.06em] text-balance">
+            <h2 className="text-ink mt-5 font-sans text-[clamp(27px,7vw,38px)] leading-[1.1] md:text-[clamp(38px,5.2vw,66px)] md:leading-[1] font-semibold tracking-[-0.06em] text-balance">
               {copy.featuresTitle}
             </h2>
             <p className="text-muted mx-auto mt-6 max-w-[760px] text-[clamp(16px,1.35vw,19px)] leading-[1.65]">
@@ -1186,7 +1186,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
           <p className="text-center text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">
             {copy.faqEyebrow}
           </p>
-          <h2 className="text-ink mx-auto mt-5 max-w-[17ch] text-center font-sans text-[clamp(36px,4.5vw,56px)] leading-[1.02] font-semibold tracking-[-0.055em] text-balance">
+          <h2 className="text-ink mx-auto mt-5 max-w-[17ch] text-center font-sans text-[clamp(26px,6.6vw,36px)] leading-[1.1] md:text-[clamp(36px,4.5vw,56px)] md:leading-[1.02] font-semibold tracking-[-0.055em] text-balance">
             {copy.faqTitle}
           </h2>
           <div className="mt-10 grid gap-3">
@@ -1210,7 +1210,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
           <div className="relative flex min-h-[480px] items-center justify-center overflow-hidden rounded-[30px] bg-[url('/optimized/shogunai-hero-kyoto-v3.jpg')] bg-cover bg-center px-6 py-16 text-center text-white sm:min-h-[540px]">
             <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(3,18,37,0.8),rgba(62,34,118,0.48)_55%,rgba(4,16,31,0.74))]" />
             <div className="relative mx-auto max-w-[900px]">
-              <h2 className="font-sans text-[clamp(42px,6vw,74px)] leading-[0.97] font-semibold tracking-[-0.065em] text-balance">
+              <h2 className="font-sans text-[clamp(29px,7.4vw,42px)] leading-[1.06] md:text-[clamp(42px,6vw,74px)] md:leading-[0.97] font-semibold tracking-[-0.065em] text-balance">
                 {copy.finalTitle}
               </h2>
               <p className="mx-auto mt-7 max-w-[680px] text-[clamp(17px,1.7vw,21px)] leading-[1.6] text-white/85">
