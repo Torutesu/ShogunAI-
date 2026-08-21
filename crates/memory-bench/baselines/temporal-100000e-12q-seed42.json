@@ -1,0 +1,83 @@
+{
+  "benchmark": "shogun-memory-bench",
+  "version": "0.1",
+  "config": {
+    "workload": "temporal",
+    "seed": 42,
+    "events": 100000,
+    "queries": 12,
+    "k": 10,
+    "warmup": 20,
+    "db_path": "C:\\Users\\sisig\\AppData\\Local\\Temp\\claude\\d--ShogunAI\\1fe674f8-b7dc-4584-a7c3-48315f3ef914\\scratchpad\\db\\t.db",
+    "out_dir": "C:\\Users\\sisig\\AppData\\Local\\Temp\\claude\\d--ShogunAI\\1fe674f8-b7dc-4584-a7c3-48315f3ef914\\scratchpad\\out\\reports",
+    "write_batch": 1000
+  },
+  "environment": {
+    "os": "windows",
+    "arch": "x86_64",
+    "git_commit": "79f8516c4161dbe422f573ca3fad068c12ac067a",
+    "git_dirty": false,
+    "profile": "release"
+  },
+  "mode": {
+    "semantic": false,
+    "in_memory": false
+  },
+  "backend": "shogun-memory",
+  "writes": {
+    "submitted": 100000,
+    "deduplicated": 12,
+    "failed": 0,
+    "rows_after": 99988,
+    "unique_facts": 99988,
+    "duplicate_events": 12
+  },
+  "write_latency": {
+    "n": 100000,
+    "min_ms": 0.0756,
+    "mean_ms": 0.1956058830000043,
+    "p50_ms": 0.1137,
+    "p95_ms": 0.3966,
+    "p99_ms": 0.9802,
+    "max_ms": 88.6718
+  },
+  "query_latency": {
+    "n": 12,
+    "min_ms": 10.8488,
+    "mean_ms": 20.477216666666667,
+    "p50_ms": 18.9641,
+    "p95_ms": 33.2375,
+    "p99_ms": 33.2375,
+    "max_ms": 33.2375
+  },
+  "quality": {
+    "queries": 12,
+    "failed": 0,
+    "recall_at_1": 0.0,
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "mrr": 0.5,
+    "temporal_queries": 12,
+    "stale_returned": 12,
+    "stale_outranked_current": 12,
+    "stale_rate": 1.0,
+    "stale_outranked_rate": 1.0
+  },
+  "resources": null,
+  "storage": {
+    "initial_logical_bytes": 303104,
+    "final_logical_bytes": 63602688,
+    "final_file_bytes": 81104096,
+    "bytes_per_row": 636.1032123854862
+  },
+  "slo": {
+    "name": "NFR-SLO-04 local search p95",
+    "threshold_ms": 500.0,
+    "measured_p95_ms": 33.2375,
+    "verdict": "Pass",
+    "authoritative": false
+  },
+  "write_amplification": 1.0,
+  "duplicate_collapse_rate": 1.0,
+  "wall_seconds": 25.4977908
+}

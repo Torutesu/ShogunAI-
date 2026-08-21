@@ -8,6 +8,9 @@ p95 計測ベンチをCIに置く（Linuxで実行可能）"* — and it is the 
 `spike_harness::slo::LOCAL_SEARCH_MS`, whose own comment still reads *"Not exercised in Phase 0;
 kept for Phase 1."*
 
+Measured baseline: [BASELINE.md](BASELINE.md) (100k events, release, on-disk). Machine-readable
+reports in [baselines/](baselines/).
+
 ## Purpose
 
 Before changing how memory behaves, establish what it currently does. Specifically:
