@@ -2,17 +2,22 @@
 
 import { useEffect, useRef } from 'react';
 
-const VIDEO_LOOP_START_SECONDS = 4;
 const REDUCED_MOTION_PREVIEW_SECONDS = 4;
+const DEMO_HOLD_SECONDS = 24.4;
 
 export function HeroVideo({ label }: { label: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const heldOnStableFrameRef = useRef(false);
 
   useEffect(() => {
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const syncPlayback = () => {
       const video = videoRef.current;
       if (!video) return;
+      if (heldOnStableFrameRef.current) {
+        video.pause();
+        return;
+      }
       if (motion.matches) {
         if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
           video.currentTime = REDUCED_MOTION_PREVIEW_SECONDS;
@@ -28,6 +33,58 @@ export function HeroVideo({ label }: { label: string }) {
     return () => motion.removeEventListener('change', syncPlayback);
   }, []);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    let frameCallbackId: number | undefined;
+
+    const holdOnStableFrame = () => {
+      if (heldOnStableFrameRef.current || video.currentTime < DEMO_HOLD_SECONDS) {
+        return false;
+      }
+
+      heldOnStableFrameRef.current = true;
+      video.pause();
+      video.currentTime = DEMO_HOLD_SECONDS;
+      return true;
+    };
+
+    const watchFrame = () => {
+      if (holdOnStableFrame() || typeof video.requestVideoFrameCallback !== 'function') {
+        return;
+      }
+      frameCallbackId = video.requestVideoFrameCallback(watchFrame);
+    };
+
+    const startFrameWatch = () => {
+      if (
+        heldOnStableFrameRef.current ||
+        typeof video.requestVideoFrameCallback !== 'function' ||
+        frameCallbackId !== undefined
+      ) {
+        return;
+      }
+      frameCallbackId = video.requestVideoFrameCallback(watchFrame);
+    };
+
+    const handleTimeUpdate = () => {
+      holdOnStableFrame();
+    };
+
+    video.addEventListener('playing', startFrameWatch);
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    if (!video.paused) startFrameWatch();
+
+    return () => {
+      video.removeEventListener('playing', startFrameWatch);
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+      if (frameCallbackId !== undefined && typeof video.cancelVideoFrameCallback === 'function') {
+        video.cancelVideoFrameCallback(frameCallbackId);
+      }
+    };
+  }, []);
+
   return (
     <div className="hero-video-shell" data-testid="hero-product-video">
       <video
@@ -37,12 +94,8 @@ export function HeroVideo({ label }: { label: string }) {
         className="hero-video"
         muted
         onEnded={(event) => {
-          if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-            event.currentTarget.pause();
-            return;
-          }
-          event.currentTarget.currentTime = VIDEO_LOOP_START_SECONDS;
-          void event.currentTarget.play().catch(() => undefined);
+          heldOnStableFrameRef.current = true;
+          event.currentTarget.pause();
         }}
         onLoadedMetadata={(event) => {
           if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -61,10 +114,7 @@ export function HeroVideo({ label }: { label: string }) {
           src="/optimized/shogunheromac1200-opening-static.mov"
           type='video/quicktime; codecs="hvc1"'
         />
-        <source
-          src="/optimized/shogunheromac1200-opening-static.webm"
-          type="video/webm"
-        />
+        <source src="/optimized/shogunheromac1200-opening-static.webm" type="video/webm" />
       </video>
     </div>
   );

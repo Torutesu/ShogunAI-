@@ -68,6 +68,7 @@ The same-viewport comparison confirms that the original black slab no longer tra
 10. Temporarily removed the dark opening segment and used the open product as the loading poster.
 11. Restored the closed-PC opening, kept the moving dark lid plane transparent, faded the complete screen in from 2.05 to 2.3 seconds, and made later loops resume at four seconds.
 12. Restored the localized live waitlist count beside the participant avatars, with a stable server fallback and an API refresh on page load and after successful signup.
+13. Removed the late-film dark flash and loop jump by ending the one-time demo on a stable open-product frame before the source recording fades to black.
 
 ## Live participant count QA
 
@@ -80,5 +81,18 @@ The same-viewport comparison confirms that the original black slab no longer tra
 - The component renders the server fallback immediately to avoid layout shift, then refreshes from `/api/waitlist/count` with `cache: 'no-store'`.
 - A successful waitlist submission dispatches a local refresh event so the displayed total is reconciled with the durable public count.
 - The public count endpoint returned `523` with `fresh: true` during this review.
+
+## Stable hero demo ending QA
+
+- Source recording review: `/tmp/shogun-black-jitter-17-25.jpg`
+- Hero-video timeline review: `/tmp/shogun-hero-21-26-timeline.jpg`
+- Same-viewport recording/local comparison: `/tmp/shogun-jitter-before-after-final.png`
+- Stable local frame, first sample: `/tmp/shogun-jitter-local-final-held-2.png`
+- The supplied demo still begins with the closed MacBook and plays the complete opening sequence once.
+- Playback now pauses at 24.4 seconds on the stable open-product dashboard, before the source film's broad dark fade begins.
+- The final frame remains fixed, so the Kyoto background does not appear to flash, jump, or restart beneath the MacBook.
+- Browser state remained exactly `currentTime: 24.4`, `paused: true`, and `readyState: 4` across a further four-second observation.
+- Reduced-motion behavior remains unchanged at the stable four-second open-product preview.
+- A frame-callback watch provides frame-level stopping in supported browsers; `timeupdate` remains as the compatibility fallback.
 
 final result: passed
