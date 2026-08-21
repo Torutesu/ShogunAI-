@@ -2,8 +2,8 @@
 
 import { useEffect, useRef } from 'react';
 
-const REDUCED_MOTION_PREVIEW_SECONDS = 4;
-const DEMO_HOLD_SECONDS = 24.4;
+const REDUCED_MOTION_PREVIEW_SECONDS = 3;
+const DEMO_HOLD_SECONDS = 23.25;
 
 export function HeroVideo({ label }: { label: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -87,35 +87,38 @@ export function HeroVideo({ label }: { label: string }) {
 
   return (
     <div className="hero-video-shell" data-testid="hero-product-video">
-      <video
-        ref={videoRef}
-        aria-label={label}
-        autoPlay
-        className="hero-video"
-        muted
-        onEnded={(event) => {
-          heldOnStableFrameRef.current = true;
-          event.currentTarget.pause();
-        }}
-        onLoadedMetadata={(event) => {
-          if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-            event.currentTarget.currentTime = REDUCED_MOTION_PREVIEW_SECONDS;
-            event.currentTarget.pause();
-          }
-        }}
-        playsInline
-        poster="/optimized/shogunheromac-v3-alpha-poster.png"
-        preload="metadata"
-        tabIndex={-1}
-        width={960}
-        height={724}
-      >
-        <source
-          src="/optimized/shogunheromac-v3-alpha.mov"
-          type='video/quicktime; codecs="hvc1"'
-        />
-        <source src="/optimized/shogunheromac-v3-alpha.webm" type="video/webm" />
-      </video>
+      <div className="hero-macbook">
+        <div className="hero-macbook-lid">
+          <div className="hero-macbook-screen">
+            <video
+              ref={videoRef}
+              aria-label={label}
+              autoPlay
+              className="hero-video"
+              muted
+              onEnded={(event) => {
+                heldOnStableFrameRef.current = true;
+                event.currentTarget.pause();
+              }}
+              onLoadedMetadata={(event) => {
+                if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                  event.currentTarget.currentTime = REDUCED_MOTION_PREVIEW_SECONDS;
+                  event.currentTarget.pause();
+                }
+              }}
+              playsInline
+              poster="/optimized/shogunheromac-v4-screen-poster.jpg"
+              preload="metadata"
+              tabIndex={-1}
+              width={1200}
+              height={782}
+            >
+              <source src="/optimized/shogunheromac-v4-screen.mp4" type="video/mp4" />
+            </video>
+          </div>
+        </div>
+        <div className="hero-macbook-base" aria-hidden="true" />
+      </div>
     </div>
   );
 }

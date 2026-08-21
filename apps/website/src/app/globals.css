@@ -389,15 +389,89 @@ html[data-theme='dark'] .theme-light-badge {
   position: relative;
   isolation: isolate;
   width: min(100%, 740px);
-  aspect-ratio: 960 / 724;
+  aspect-ratio: 1200 / 904;
+  perspective: 1600px;
+}
+
+.hero-macbook {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.hero-macbook-lid {
+  position: absolute;
+  z-index: 1;
+  top: 4.2%;
+  right: 4%;
+  bottom: 9%;
+  left: 4%;
+  overflow: hidden;
+  border: 1px solid rgba(93, 111, 136, 0.58);
+  border-radius: clamp(20px, 2.4vw, 34px) clamp(20px, 2.4vw, 34px) 22px 22px;
+  background: linear-gradient(145deg, #1c2737 0%, #0c1420 52%, #151f2d 100%);
+  backface-visibility: hidden;
+  transform: rotateX(0deg);
+  transform-origin: 50% 99%;
+  animation: hero-macbook-open 1100ms cubic-bezier(0.2, 0.72, 0.2, 1) both;
+  will-change: transform;
+}
+
+.hero-macbook-screen {
+  position: absolute;
+  inset: 2.15% 1.5% 9%;
+  overflow: hidden;
+  border: 1px solid rgba(5, 9, 16, 0.9);
+  border-radius: 12px 12px 16px 16px;
+  background: #07101d;
 }
 
 .hero-video {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: fill;
   filter: saturate(0.96) contrast(1.03);
+}
+
+.hero-macbook-base {
+  position: absolute;
+  z-index: 2;
+  right: 2.65%;
+  bottom: 6.95%;
+  left: 2.65%;
+  height: 2.7%;
+  border: 1px solid rgba(83, 99, 119, 0.72);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #546173 0%, #202c3c 34%, #0b111a 76%, #253142 100%);
+}
+
+.hero-macbook-base::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 43%;
+  width: 14%;
+  height: 34%;
+  border-radius: 0 0 999px 999px;
+  background: rgba(6, 11, 18, 0.75);
+}
+
+@keyframes hero-macbook-open {
+  0%,
+  8% {
+    transform: rotateX(-88deg);
+  }
+
+  100% {
+    transform: rotateX(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-macbook-lid {
+    animation: none;
+  }
 }
 
 @media (min-width: 1024px) and (max-height: 760px) {
