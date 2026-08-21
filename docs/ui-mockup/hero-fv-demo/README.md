@@ -17,13 +17,26 @@ Product Hunt ローンチ と LP ファーストビューのための、**操作
 | `build.py` | 壁紙を data URI で埋め込んで `index.html` を吐く |
 | `index.html` | 生成物（自己完結・外部リクエストなし）。直接編集しない |
 | `wallpaper.jpg` | 本物の macOS Sequoia Light 標準壁紙（6K 原本を FV 比率にクロップ・縮小） |
-| `dock.png` | **任意。置けば実物の Dock に差し替わる**（後述）。無ければ描画版が使われる |
+| `dock.png` | **任意。置けば実物の Dock に差し替わる**（後述）。無ければ下記の混成版が使われる |
+| `logos/` | 実ブランドマークの SVG（Slack / Notion / Figma / Chrome / LINE / Gemini）。出典は `logos/SOURCES.md` |
 | `shogun-agi-30s.mp4` | **完成品のループ動画**（30.8s / 1512×982 / H.264 / 4.0MB） |
 | `shogun-agi-30s-1200.mp4` | 同・幅1200版（1.7MB）。LP 埋め込みはこちら推奨 |
 
 Artifact は単一ファイル・外部ホスト禁止（Google Fonts のみ可）なので、写真は
 sibling asset ではなく data URI で入れている。`index.html` は生成物なので、
 文言や演出を直すときは必ず `index.src.html` を直して `build.py` を回す。
+
+## Dock のアイコン
+
+**実ロゴが6つ入っている**: Slack / Notion / Figma / Chrome / LINE / Gemini。
+いずれも Wikimedia Commons の自由ライセンス版を `logos/` に置き、SVG のまま埋め込んでいる
+（出典は `logos/SOURCES.md`）。
+
+**Apple 製アプリは描画版のまま**。Finder / Safari / Mail / Calendar などのアイコンは
+非自由ライセンスで Commons に無く、取得できなかった。形は寄せてあるが本物ではない。
+Discord・Raycast・Warp なども同様に取得できず描画版。
+
+全部を本物にしたい場合は次項でスクショごと差し替える。
 
 ## Dock を実物のスクショに差し替える
 
