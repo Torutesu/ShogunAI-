@@ -57,8 +57,11 @@ export function HeroVideo({ label }: { label: string }) {
         width={1200}
         height={904}
       >
+        <source
+          src="/optimized/shogunheromac1200-alpha.mov"
+          type='video/quicktime; codecs="hvc1"'
+        />
         <source src="/optimized/shogunheromac1200-alpha.webm" type="video/webm" />
-        <source src="/optimized/shogunheromac1200.mp4" type="video/mp4" />
       </video>
     </div>
   );

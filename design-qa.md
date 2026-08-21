@@ -4,16 +4,20 @@
 
 - Source product film: `/Users/torutano/Downloads/shogunheromac1200.mp4`
 - Source opening sequence: `/tmp/shogun-hero-frames/line-composite.jpg`
-- Light-theme implementation: `/tmp/shogun-hero-final.png`
-- Dark-theme implementation: `/tmp/shogun-hero-final-dark.png`
-- Combined source/implementation review: `/tmp/shogun-hero-opening-comparison.png`
+- Closed-state implementation: `/tmp/shogun-hero-alpha-fix-early.png`
+- Opening-state implementation: `/tmp/shogun-hero-alpha-fix-opening.png`
+- Open-product implementation: `/tmp/shogun-hero-alpha-fix-open.png`
+- Combined source/implementation review: `/tmp/shogun-hero-alpha-fix-comparison.png`
+- Safari HEVC alpha decode: `/tmp/shogun-alpha-audit/hevc-alpha-1.3.png`
 - Review viewport: 1440 × 900
 
 ## Intentional change
 
 The first view keeps the existing Kyoto artwork, palette, copy, form, and proof badges unchanged. Only the product-film presentation changes: it begins as a closed MacBook, opens into the supplied live product demo, and then loops from the useful open-product state rather than closing again on every cycle.
 
-The original film's dark rectangular backdrop is removed in a VP9 alpha-channel rendition. A transparent closed-MacBook poster covers metadata loading, so the page background remains continuous before playback begins. The original MP4 remains as a compatibility fallback.
+The original film's dark rectangular backdrop is removed in browser-specific alpha-channel renditions: HEVC with alpha for Safari and VP9 with alpha for Chromium/Firefox. A transparent closed-MacBook poster covers metadata loading, so the page background remains continuous before playback begins. The opaque MP4 fallback is intentionally removed; an unsupported browser keeps the transparent poster instead of revealing the moving black rectangle.
+
+The Product Hunt proof badge now uses the official Featured widget supplied by the user, with its exact destination, image URL, 250 × 54 intrinsic dimensions, and product description.
 
 ## Visual review
 
@@ -32,8 +36,12 @@ The combined comparison confirms that the source film's laptop silhouette, bezel
 - First playback: begins at 0 seconds so the physical opening motion is visible.
 - Subsequent playback: loops from 4 seconds, avoiding a repetitive close/open reset.
 - Reduced motion: seeks to the open-product preview at 4 seconds and pauses.
-- Compatibility: WebM with alpha is preferred; the existing MP4 remains the fallback source.
+- Chromium compatibility: the browser selected the VP9 alpha WebM, reached ready state 4, and played the full opening sequence.
+- Safari compatibility: AVFoundation decoded the HEVC `hvc1` MOV with alpha extrema 0–255 and transparent corner pixels.
+- Unsupported-video fallback: the transparent poster remains visible; there is no opaque video source.
 - Asset loading: metadata preload avoids making the hero video a render-blocking resource.
+- Product Hunt badge: the official external SVG loaded at its 250 × 54 intrinsic size, and the anchor uses the exact Featured campaign URL.
+- Console: no new implementation error. Local development still reports the pre-existing missing PostHog token and React development-only CSP/eval warnings; neither is produced by the video or badge change.
 
 ## Iteration history
 
@@ -43,5 +51,7 @@ The combined comparison confirms that the source film's laptop silhouette, bezel
 4. Reworked the film start state from an already-open demo to a closed MacBook that opens naturally.
 5. Removed the baked-in dark backdrop with an alpha video and added a transparent closed-state poster.
 6. Preserved the existing hero background in both themes and compared the source sequence and implementation in one visual input.
+7. Added Safari-native HEVC alpha, removed the opaque MP4 fallback, and verified the complete opening motion in the in-app browser.
+8. Replaced the Product Hunt review badge with the official Featured widget.
 
 final result: passed

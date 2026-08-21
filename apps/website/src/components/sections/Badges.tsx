@@ -62,15 +62,15 @@ function ProductHuntBadge() {
   return (
     <div className="flex h-[64px] items-center justify-center sm:h-[96px]">
       <a
-        href="https://www.producthunt.com/products/shogunai/reviews/new?utm_source=badge-product_review&utm_medium=badge&utm_source=badge-shogunai"
+        href="https://www.producthunt.com/products/shogunai?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-shogunai"
         target="_blank"
-        rel="noreferrer"
-        aria-label="Review ShogunAI on Product Hunt"
+        rel="noopener noreferrer"
+        aria-label="View ShogunAI on Product Hunt"
         className="flex h-full items-center justify-center rounded-[18px] transition-transform hover:-translate-y-0.5"
       >
         <img
-          src="/product-hunt-review.svg"
-          alt="ShogunAI - Personal AGI | Product Hunt"
+          src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1228269&theme=light&t=1787296862710"
+          alt="ShogunAI - Your personal AGI on your PC. Built to finish real work. | Product Hunt"
           width={250}
           height={54}
           className="h-full w-auto max-w-[248px] object-contain sm:max-w-[352px]"

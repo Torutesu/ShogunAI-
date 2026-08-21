@@ -58,7 +58,7 @@ const nextConfig = {
             // Next.js needs inline bootstrap scripts/styles. Every other
             // resource type is restricted to this origin or the two explicit
             // logo providers used by the LP.
-            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://img.logo.dev https://cdn.brandfetch.io; font-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests",
+            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://img.logo.dev https://cdn.brandfetch.io https://api.producthunt.com; font-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests",
           },
         ],
       },
