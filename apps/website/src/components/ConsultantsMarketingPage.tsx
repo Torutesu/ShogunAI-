@@ -27,6 +27,8 @@ type VisualCopy = {
   review: string;
   approved: string;
 };
+/** One headline figure under the before/after claim. */
+type Stat = { value: string; label: string };
 /** One before/after scene: what the day costs today, and what it costs with the memory in place. */
 type Case = { title: string; before: string; lost: string; after: string };
 type UseCaseCopy = {
@@ -39,6 +41,8 @@ type UseCaseCopy = {
   comparisonEyebrow: string;
   comparisonTitle: string;
   comparisonBody: string;
+  stats: readonly [Stat, Stat, Stat];
+  statsNote: string;
   cases: readonly [Case, Case, Case, Case, Case];
   featuresEyebrow: string;
   featuresTitle: string;
@@ -60,9 +64,16 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroCta: 'Get early access',
     proof: ['Local-first memory', 'Bring your own AI', 'Approval before sending'],
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'Not ten percent better. Ten times, a hundred times.',
+    comparisonTitle: 'Not 10% better. 10×, 100×.',
     comparisonBody:
       'Five moments from a day spent across several clients. Open a card to swap today for the same day with ShogunAI in it.',
+    stats: [
+      { value: '43 min', label: 'Lost across these five moments' },
+      { value: '0 min', label: 'With ShogunAI' },
+      { value: '37 hrs', label: 'Once a week each, over a year' },
+    ],
+    statsNote:
+      'The sum of the times named in the five scenes below — arithmetic from those scenes, not a measurement. The yearly figure assumes each happens once a week.',
     cases: [
       {
         title: 'Switching between clients',
@@ -136,9 +147,16 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroCta: '早期アクセスを申し込む',
     proof: ['ローカルファースト', '利用するAIを選択', '送信前に承認'],
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: '10%の改善ではない。10X、100Xの話だ。',
+    comparisonTitle: '10%の改善ではない。10×、100×。',
     comparisonBody:
       '複数のクライアントを持つ人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
+    stats: [
+      { value: '43分', label: 'いま、この5場面で消える時間' },
+      { value: '0分', label: 'ShogunAI のあと' },
+      { value: '37時間', label: '週に一度ずつなら、1年で' },
+    ],
+    statsNote:
+      '下の5場面に書かれている時間の合計です。実測値ではなく、記述からの算出。年換算は各場面が週に一度起きた場合。',
     cases: [
       {
         title: '案件の切り替え',
@@ -211,9 +229,16 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroCta: 'Solicitar acceso anticipado',
     proof: ['Memoria local-first', 'Elige tu IA', 'Aprobación antes de enviar'],
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'No es un diez por ciento mejor. Es diez veces, cien veces.',
+    comparisonTitle: 'No es un 10% mejor. Es 10×, 100×.',
     comparisonBody:
       'Cinco momentos de un día repartido entre varios clientes. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
+    stats: [
+      { value: '43 min', label: 'Perdido en estos cinco momentos' },
+      { value: '0 min', label: 'Con ShogunAI' },
+      { value: '37 h', label: 'Una vez por semana, en un año' },
+    ],
+    statsNote:
+      'Suma de los tiempos citados en las cinco escenas de abajo: aritmética sobre esas escenas, no una medición. El dato anual supone una vez por semana cada una.',
     cases: [
       {
         title: 'Cambiar de cliente',
@@ -287,9 +312,16 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroCta: 'Frühzugang anfragen',
     proof: ['Local-first-Gedächtnis', 'Eigene KI wählen', 'Freigabe vor dem Senden'],
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'Nicht zehn Prozent besser. Zehnmal, hundertmal.',
+    comparisonTitle: 'Nicht 10% besser. 10×, 100×.',
     comparisonBody:
       'Fünf Momente aus einem Tag zwischen mehreren Kunden. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
+    stats: [
+      { value: '43 Min.', label: 'In diesen fünf Momenten verloren' },
+      { value: '0 Min.', label: 'Mit ShogunAI' },
+      { value: '37 Std.', label: 'Je einmal pro Woche, aufs Jahr' },
+    ],
+    statsNote:
+      'Summe der Zeiten aus den fünf Szenen unten — gerechnet, nicht gemessen. Der Jahreswert nimmt an, dass jede Szene einmal pro Woche vorkommt.',
     cases: [
       {
         title: 'Zwischen Kunden wechseln',
@@ -366,9 +398,16 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'from scratch each morning',
     heroBody: 'Three businesses at once, and the decisions are spread across Slack, mail and meetings. You set today’s priorities without ever seeing what changed on Friday. What is lost is not twenty-five minutes — it is the judgement you already made.',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'Not ten percent better. Ten times, a hundred times.',
+    comparisonTitle: 'Not 10% better. 10×, 100×.',
     comparisonBody:
       'Five moments from a day spent across several businesses. Open a card to swap today for the same day with ShogunAI in it.',
+    stats: [
+      { value: '75 min', label: 'Lost across these five moments' },
+      { value: '0 min', label: 'With ShogunAI' },
+      { value: '65 hrs', label: 'Once a week each, over a year' },
+    ],
+    statsNote:
+      'The sum of the times named in the five scenes below — arithmetic from those scenes, not a measurement. The yearly figure assumes each happens once a week.',
     cases: [
       {
         title: 'Rebuilding the morning',
@@ -439,9 +478,16 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: '毎朝ゼロから組み立て直している',
     heroBody: '3事業を並行し、決定はSlackとメールと会議に散らばる。先週の変更に気づかないまま、今日の優先順位を決めている。失われているのは25分ではなく、自分が下したはずの判断そのものだ。',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: '10%の改善ではない。10X、100Xの話だ。',
+    comparisonTitle: '10%の改善ではない。10×、100×。',
     comparisonBody:
       '複数の事業を持つ人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
+    stats: [
+      { value: '75分', label: 'いま、この5場面で消える時間' },
+      { value: '0分', label: 'ShogunAI のあと' },
+      { value: '65時間', label: '週に一度ずつなら、1年で' },
+    ],
+    statsNote:
+      '下の5場面に書かれている時間の合計です。実測値ではなく、記述からの算出。年換算は各場面が週に一度起きた場合。',
     cases: [
       {
         title: '朝、状況を組み立て直す',
@@ -511,9 +557,16 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'la base de tus decisiones',
     heroBody: 'Tres negocios a la vez y las decisiones repartidas entre Slack, correo y reuniones. Fijas las prioridades de hoy sin haber visto lo que cambió el viernes. No se pierden veinticinco minutos: se pierde el criterio que ya aplicaste.',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'No es un diez por ciento mejor. Es diez veces, cien veces.',
+    comparisonTitle: 'No es un 10% mejor. Es 10×, 100×.',
     comparisonBody:
       'Cinco momentos de un día repartido entre varios negocios. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
+    stats: [
+      { value: '75 min', label: 'Perdido en estos cinco momentos' },
+      { value: '0 min', label: 'Con ShogunAI' },
+      { value: '65 h', label: 'Una vez por semana, en un año' },
+    ],
+    statsNote:
+      'Suma de los tiempos citados en las cinco escenas de abajo: aritmética sobre esas escenas, no una medición. El dato anual supone una vez por semana cada una.',
     cases: [
       {
         title: 'Reconstruir la mañana',
@@ -585,9 +638,16 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'jeder Entscheidung neu auf',
     heroBody: 'Drei Geschäfte gleichzeitig, die Entscheidungen verteilt über Slack, Mail und Meetings. Du setzt die Prioritäten für heute, ohne gesehen zu haben, was sich am Freitag geändert hat. Verloren gehen nicht 25 Minuten, sondern dein eigenes Urteil.',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'Nicht zehn Prozent besser. Zehnmal, hundertmal.',
+    comparisonTitle: 'Nicht 10% besser. 10×, 100×.',
     comparisonBody:
       'Fünf Momente aus einem Tag zwischen mehreren Geschäften. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
+    stats: [
+      { value: '75 Min.', label: 'In diesen fünf Momenten verloren' },
+      { value: '0 Min.', label: 'Mit ShogunAI' },
+      { value: '65 Std.', label: 'Je einmal pro Woche, aufs Jahr' },
+    ],
+    statsNote:
+      'Summe der Zeiten aus den fünf Szenen unten — gerechnet, nicht gemessen. Der Jahreswert nimmt an, dass jede Szene einmal pro Woche vorkommt.',
     cases: [
       {
         title: 'Den Morgen neu zusammensetzen',
@@ -662,9 +722,16 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'so it disappears every time',
     heroBody: 'Every interruption takes the thread with it, and three weeks later you are digging for your own reasoning. The spec sits in Slack, in a hallway conversation and in an issue, and something falls out while you collect it.',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'Not ten percent better. Ten times, a hundred times.',
+    comparisonTitle: 'Not 10% better. 10×, 100×.',
     comparisonBody:
       'Five moments from a day spent across several codebases. Open a card to swap today for the same day with ShogunAI in it.',
+    stats: [
+      { value: '145 min', label: 'Lost across these five moments' },
+      { value: '0 min', label: 'With ShogunAI' },
+      { value: '125 hrs', label: 'Once a week each, over a year' },
+    ],
+    statsNote:
+      'The sum of the times named in the five scenes below — arithmetic from those scenes, not a measurement. The yearly figure assumes each happens once a week.',
     cases: [
       {
         title: 'Coming back from an interruption',
@@ -736,9 +803,16 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: '毎回消えている',
     heroBody: '中断のたびに思考が飛び、3週間後の自分が理由を掘り返す。仕様はSlackと口頭とissueに散らばり、集める途中で1つ落ちて手戻りになる。',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: '10%の改善ではない。10X、100Xの話だ。',
+    comparisonTitle: '10%の改善ではない。10×、100×。',
     comparisonBody:
       '複数のコードベースを行き来する人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
+    stats: [
+      { value: '145分', label: 'いま、この5場面で消える時間' },
+      { value: '0分', label: 'ShogunAI のあと' },
+      { value: '125時間', label: '週に一度ずつなら、1年で' },
+    ],
+    statsNote:
+      '下の5場面に書かれている時間の合計です。実測値ではなく、記述からの算出。年換算は各場面が週に一度起きた場合。',
     cases: [
       {
         title: '中断からの復帰',
@@ -808,9 +882,16 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'y desaparece cada vez',
     heroBody: 'Cada interrupción se lleva el hilo y tres semanas después estás desenterrando tu propio razonamiento. La especificación vive en Slack, en una conversación de pasillo y en un issue, y algo se cae mientras la reúnes.',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'No es un diez por ciento mejor. Es diez veces, cien veces.',
+    comparisonTitle: 'No es un 10% mejor. Es 10×, 100×.',
     comparisonBody:
       'Cinco momentos de un día repartido entre varias bases de código. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
+    stats: [
+      { value: '145 min', label: 'Perdido en estos cinco momentos' },
+      { value: '0 min', label: 'Con ShogunAI' },
+      { value: '125 h', label: 'Una vez por semana, en un año' },
+    ],
+    statsNote:
+      'Suma de los tiempos citados en las cinco escenas de abajo: aritmética sobre esas escenas, no una medición. El dato anual supone una vez por semana cada una.',
     cases: [
       {
         title: 'Volver tras una interrupción',
@@ -882,9 +963,16 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'und verschwindet jedes Mal',
     heroBody: 'Jede Unterbrechung nimmt den Faden mit, und drei Wochen später gräbst du nach deiner eigenen Begründung. Die Spezifikation steckt in Slack, in einem Flurgespräch und in einem Issue — beim Einsammeln fällt etwas heraus.',
     comparisonEyebrow: 'Before / After',
-    comparisonTitle: 'Nicht zehn Prozent besser. Zehnmal, hundertmal.',
+    comparisonTitle: 'Nicht 10% besser. 10×, 100×.',
     comparisonBody:
       'Fünf Momente aus einem Tag zwischen mehreren Codebasen. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
+    stats: [
+      { value: '145 Min.', label: 'In diesen fünf Momenten verloren' },
+      { value: '0 Min.', label: 'Mit ShogunAI' },
+      { value: '125 Std.', label: 'Je einmal pro Woche, aufs Jahr' },
+    ],
+    statsNote:
+      'Summe der Zeiten aus den fünf Szenen unten — gerechnet, nicht gemessen. Der Jahreswert nimmt an, dass jede Szene einmal pro Woche vorkommt.',
     cases: [
       {
         title: 'Rückkehr nach einer Unterbrechung',
@@ -1128,13 +1216,38 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
         <div className="container-x">
           <div className="mx-auto max-w-[940px] text-center">
             <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.comparisonEyebrow}</p>
-            <h2 className="text-ink mt-5 font-sans text-[clamp(38px,5.3vw,68px)] leading-[1] font-semibold tracking-[-0.06em] text-balance">
+            <h2 className="text-ink mt-5 font-sans text-[clamp(38px,5.3vw,68px)] leading-[1.06] font-semibold tracking-[-0.06em] text-balance [word-break:keep-all]">
               {copy.comparisonTitle}
             </h2>
             <p className="text-muted mx-auto mt-6 max-w-[760px] text-[clamp(16px,1.35vw,19px)] leading-[1.65]">
               {copy.comparisonBody}
             </p>
           </div>
+          {/* The claim in figures: what the five scenes below cost today, and what they cost after. */}
+          <div className="mx-auto mt-12 grid max-w-[900px] gap-4 sm:grid-cols-3">
+            {copy.stats.map((stat, index) => (
+              <div
+                key={stat.label}
+                className={
+                  index === 1
+                    ? 'theme-soft-section rounded-[22px] bg-[#f7f4ff] px-6 py-7 text-center'
+                    : 'theme-light-panel border-border bg-surface rounded-[22px] border px-6 py-7 text-center'
+                }
+              >
+                <p
+                  className={`font-sans text-[clamp(34px,4.4vw,56px)] leading-[1] font-semibold tracking-[-0.06em] ${
+                    index === 1 ? 'text-[#6758ff]' : 'text-ink'
+                  }`}
+                >
+                  {stat.value}
+                </p>
+                <p className="text-muted mt-3 text-[13px] leading-[1.5]">{stat.label}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-muted mx-auto mt-5 max-w-[760px] text-center text-[12px] leading-[1.6]">
+            {copy.statsNote}
+          </p>
           <CaseCards cases={copy.cases} labels={ui} />
           <div className="mt-12 flex justify-center">
             <Link
