@@ -1,0 +1,84 @@
+name: memory-bench
+
+# The full-scale SHOGUN memory benchmark (WP2.6 / NFR-SLO-04): 100k synthetic events, p95 write
+# and search latency, retrieval quality, write amplification, and CPU/RSS/storage.
+#
+# Manually triggered, never on push. A 100k-event release run costs real CI minutes and its numbers
+# only mean something when nobody is competing for the runner — putting it on every commit would
+# make it both expensive and noisy, and `docs/phase1-implementation-plan.md` asks only that it be
+# *runnable* in CI on Linux.
+#
+# IMPORTANT: a green verdict here is a regression signal, not an SLO certification. The plan is
+# explicit that the SLO is confirmed with on-device macOS numbers, and this run is additionally
+# lexical-only (no ONNX embedder), which the report records as `mode.semantic: false`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      workload:
+        description: "clean | duplicate | temporal"
+        required: false
+        default: "clean"
+      events:
+        description: "Events to ingest"
+        required: false
+        default: "100000"
+      queries:
+        description: "Queries to run"
+        required: false
+        default: "500"
+      seed:
+        description: "Workload seed (same seed = same corpus)"
+        required: false
+        default: "42"
+
+concurrency:
+  group: memory-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: 100k memory benchmark (Linux, release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Release only. A debug build's latency is roughly an order of magnitude off, and the plan
+      # requires SLO measurement on release builds.
+      - name: Build (release)
+        run: cargo build -p memory-bench --release
+
+      - name: Environment
+        run: |
+          uname -a
+          nproc
+          free -m || true
+          df -h . || true
+
+      # On-disk, not in-memory: an in-memory database skips fsync entirely, so its write latency is
+      # not the latency the product pays.
+      - name: Run benchmark
+        run: |
+          mkdir -p reports
+          ./target/release/memory-bench \
+            --workload "${{ github.event.inputs.workload || 'clean' }}" \
+            --events "${{ github.event.inputs.events || '100000' }}" \
+            --queries "${{ github.event.inputs.queries || '500' }}" \
+            --seed "${{ github.event.inputs.seed || '42' }}" \
+            --db "$RUNNER_TEMP/memory-bench.db" \
+            --out reports
+
+      - name: Report
+        if: always()
+        run: cat reports/*.json || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-bench-${{ github.event.inputs.workload || 'clean' }}-${{ github.run_id }}
+          path: reports/*.json
+          if-no-files-found: warn
