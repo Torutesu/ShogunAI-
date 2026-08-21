@@ -16,7 +16,7 @@ export default function OpengraphImage() {
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'center',
-          padding: '80px',
+          padding: '96px',
           background: 'linear-gradient(135deg, #f7f9ff 0%, #ffffff 52%, #f5f1e8 100%)',
           fontFamily: 'sans-serif',
         }}
@@ -43,19 +43,16 @@ export default function OpengraphImage() {
             marginTop: 40,
             display: 'flex',
             flexDirection: 'column',
-            fontSize: 68,
+            fontSize: 58,
             fontWeight: 700,
             lineHeight: 1.05,
             letterSpacing: '-0.02em',
             color: '#090b0c',
-            maxWidth: 900,
+            maxWidth: 1000,
           }}
         >
-          <span>Your personal AGI</span>
-          <span style={{ color: '#004cfc' }}>on your PC.</span>
-        </div>
-        <div style={{ marginTop: 28, fontSize: 30, color: '#50617f' }}>
-          Built to finish real work.
+          <span>Your personal AGI on your PC.</span>
+          <span style={{ color: '#004cfc' }}>Built to finish real work.</span>
         </div>
       </div>
     ),
