@@ -47,9 +47,13 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   --dev-w:1604px; --dev-h:1134px;
 }
 .macbox{position:relative;flex:none}
-.mac{position:absolute;top:0;left:0;width:var(--dev-w);height:var(--dev-h);transform-origin:top left}
+.mac{position:absolute;top:0;left:0;width:var(--dev-w);height:var(--dev-h);transform-origin:top left;
+  perspective:2900px;perspective-origin:50% 84%}
 
+/* The hinge is the lid's own bottom edge, which is exactly where the deck starts — so the
+   lid swings on the seam it really swings on, and no separate hinge fudge is needed. */
 .lid{position:absolute;top:0;left:20px;width:var(--lid-w);height:var(--lid-h);
+  transform-origin:50% 100%;transform:rotateX(0deg);will-change:transform;
   border-radius:48px;background:#08090B;padding:var(--bz-t) var(--bz-x) 0;
   box-shadow:0 0 0 1.5px #2A2E36, 0 0 0 2.5px rgba(255,255,255,.06),
              0 70px 130px -45px rgba(0,0,0,.95), 0 12px 40px -12px rgba(0,0,0,.6)}
@@ -68,7 +72,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
    would pull the eye off the screen, which is the one place it needs to stay. */
 .base{position:absolute;left:0;top:var(--lid-h);width:var(--base-w);height:var(--base-h);
   border-radius:3px 3px 11px 11px;
-  background:linear-gradient(180deg,#6A6F78 0,#6A6F78 1.5px,#3C4048 2.5px,
+  background:linear-gradient(180deg,#868D97 0,#868D97 1.5px,#3E434B 3px,
              #2E323A 42%,#20232A 76%,#15171B 100%);
   box-shadow:0 24px 46px -16px rgba(0,0,0,.9),inset 0 -1px 0 rgba(0,0,0,.55)}
 /* the recess you put a finger in to open it */
@@ -76,13 +80,34 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   border-radius:0 0 44px 44px;
   background:linear-gradient(180deg,#191C21 0,#2B2F36 55%,#454A53 100%);
   box-shadow:inset 0 2px 3px rgba(0,0,0,.55)}
+/* Shut, seen from the front: the clamshell's own front edge resting on the deck. The lid
+   plane is edge-on at 90deg and therefore has no height of its own, so the ~6mm of lid
+   thickness has to be drawn. It hands over to the real lid a beat after the swing starts. */
+.shut{position:absolute;left:20px;top:calc(var(--lid-h) - 30px);width:var(--lid-w);height:30px;
+  border-radius:10px 10px 3px 3px;
+  background:linear-gradient(180deg,#98A0AB 0,#98A0AB 1.5px,#4A4F58 3px,
+             #2B2F36 42%,#1B1E24 78%,#0E1014 100%);
+  box-shadow:0 0 0 1.5px #333842,0 -4px 18px rgba(0,0,0,.5);
+  opacity:0;transition:opacity 200ms ease;pointer-events:none}
+body.lidshut .shut{opacity:1}   /* state class deliberately NOT .shut: a body
+   carrying the same class name as the element would match the .shut rule itself
+   and take position:absolute + height:30px with it, taking the machine off screen. */
+body.nomac .shut{display:none}
+body.nomac .lid{transform:none!important}
+
+/* The display itself, off. A Mac wakes on the way open, so this clears while the lid is
+   still moving rather than after it lands. */
+.scroff{position:absolute;inset:0;z-index:9;background:#04050A;pointer-events:none;
+  opacity:0;transition:opacity 460ms ease}
+body.scrdark .scroff{opacity:1;transition:opacity 120ms ease}
+
 /* the dark line where the lid meets the deck */
 .base::before{content:"";position:absolute;left:30px;right:30px;top:-4px;height:4px;
   background:rgba(0,0,0,.75);filter:blur(2.5px)}
-.floor{position:absolute;left:50%;top:calc(var(--lid-h) + var(--base-h) - 6px);
-  transform:translateX(-50%);width:1300px;height:70px;border-radius:50%;
-  background:radial-gradient(closest-side,rgba(0,0,0,.55),transparent 75%);
-  filter:blur(22px);pointer-events:none}
+.floor{position:absolute;left:50%;top:calc(var(--lid-h) + var(--base-h) - 10px);
+  transform:translateX(-50%);width:1560px;height:96px;border-radius:50%;
+  background:radial-gradient(closest-side,rgba(0,0,0,.72),rgba(0,0,0,.3) 55%,transparent 78%);
+  filter:blur(26px);pointer-events:none}
 
 /* Bare screen, for anyone who wants the old framing back. */
 body.nomac .mac{--dev-w:var(--scr-w);--dev-h:var(--scr-h)}
@@ -415,8 +440,11 @@ body.clean .esc{opacity:1}
 
 /* capture mode: the machine alone, centred in whatever viewport the recorder sets.
    1700x1228 with the frame (the lid plus room for its shadow), 1512x982 without. */
+/* Lighter than it wants to be. A Space Black machine with its screen off is very nearly the
+   colour of a black backdrop, and the loop opens on exactly that — half a second of a shut
+   laptop that has to be legible as a shut laptop, not as a blank frame. */
 body.capture{overflow:hidden;
-  background:radial-gradient(125% 95% at 50% 8%,#151B27 0%,#0B0E14 52%,#05060A 100%)}
+  background:radial-gradient(135% 105% at 50% 4%,#28323F 0%,#161C26 44%,#0A0D13 100%)}
 body.capture .room{padding:0 0 40px;width:100vw;height:100vh}
 /* a rim of light around the machine, so it sits in a room instead of on a black card */
 body.capture .bloom{top:50%;left:50%;transform:translate(-50%,-54%);
@@ -437,7 +465,8 @@ body.capture.nomac .stage{border-radius:0}
   <div class="macbox" id="macbox">
    <div class="mac" id="mac">
     <div class="floor"></div>
-    <div class="lid">
+    <div class="shut" aria-hidden="true"></div>
+    <div class="lid" id="lid">
      <div class="stage" id="stage">
       <div class="desktop" id="desktop">
       <div class="wall"></div>
@@ -656,6 +685,7 @@ Aiko</div>
       <div class="guide" id="guide"><i id="gTop"></i><i id="gBot"></i><b id="gLbl">16:9</b></div>
       </div>
       <div class="hwnotch" aria-hidden="true"></div>
+      <div class="scroff" aria-hidden="true"></div>
      </div>
     </div>
     <div class="base"><i></i></div>
@@ -676,7 +706,7 @@ Aiko</div>
     <button class="btn" id="clean">Clean mode</button>
   </div>
 </div>
-<div class="hint" id="hint">31s loop &nbsp;&middot;&nbsp; Space replay &nbsp;&middot;&nbsp; arrows step scenes &nbsp;&middot;&nbsp; C clean mode &nbsp;&middot;&nbsp; F frame</div>
+<div class="hint" id="hint">33s loop &nbsp;&middot;&nbsp; Space replay &nbsp;&middot;&nbsp; arrows step scenes &nbsp;&middot;&nbsp; C clean mode &nbsp;&middot;&nbsp; F frame</div>
 <div class="esc">Esc to bring the controls back</div>
 
 <script>
@@ -788,8 +818,38 @@ function countTo(el,n,ms,suffix){
   },16);
   T.push(iv);
 }
+/* The lid, as three knobs the scenes drive. Angle 0 is open; 90 is shut, where the plane is
+   edge-on and .shut stands in for its thickness. ms=0 means "be there now", which is what
+   resetStage needs when someone jumps between scenes. */
+let lidAngle=0;
+/* The swing is a Web Animation with its own delay rather than a CSS transition fired from a
+   setTimeout. Two reasons, both measured: a transition driven through a custom property
+   stalled ~250ms before moving, and even a WAAPI animation started on the spot lost ~190ms
+   while the compositor rasterised the lid — a layer that is edge-on at -90deg has no screen
+   area to raster from. Declaring the animation up front with fill:'backwards' hands it that
+   preparation time during the closed hold, and the swing then starts on the beat. */
+function setLid(deg,ms,ease,delay,onSwing){
+  const el=$('lid');
+  el.getAnimations().forEach(a=>a.cancel());
+  const from=lidAngle; lidAngle=deg;
+  el.style.transform='rotateX('+deg+'deg)';           /* land here whatever happens */
+  if(!ms||from===deg){if(onSwing)onSwing();return}
+  const a=el.animate([{transform:'rotateX('+from+'deg)'},{transform:'rotateX('+deg+'deg)'}],
+                     {duration:ms,delay:delay||0,easing:ease||'linear',fill:'backwards'});
+  a.onfinish=()=>a.cancel();
+  /* Everything that has to land with the swing hangs off `ready` rather than off its own
+     setTimeout. The animation is only committed on the first frame after the scene switch,
+     and that frame arrives ~200ms late because go() rebuilds a screenful of DOM first — so
+     wall-clock timers and the swing drift apart, and the shut bar fades over a lid that has
+     not started to move. `ready` resolves at the moment the delay clock actually starts. */
+  if(onSwing)a.ready.then(()=>after(delay||0,onSwing)).catch(()=>{});
+}
+const setShut=on=>document.body.classList.toggle('lidshut',on);
+const setDark=on=>document.body.classList.toggle('scrdark',on);
+
 function resetStage(){
   clearT();
+  setLid(0,0);setShut(false);setDark(false);
   ['pBrief','pWorld','pSearch','pEve','pLearn'].forEach(id=>$(id).classList.remove('open'));
   ['scMail','scMeet','scEnd'].forEach(id=>$(id).classList.remove('live'));
   glow.classList.remove('on');
@@ -891,11 +951,28 @@ const SCENES = [
    chin.classList.add('hide');
    $('pLearn').classList.add('open');
  }},
- {name:'Mark',dur:1500,run(){
+ /* The mark stays lit on the way down — the last thing the loop shows is the brand going to
+    sleep with the machine, and it leaves the seam on a dead-still closed laptop. */
+ {name:'Mark',dur:1600,run(){
    chinBody.innerHTML=ARRIVE_CHIN;chin.classList.add('hide');
    $('scEnd').classList.add('live');
+   setLid(90,700,'cubic-bezier(.42,.02,.62,1)',480,()=>{
+     after(660,()=>setShut(true));
+     after(740,()=>setDark(true));
+   });
  }}
 ];
+
+/* Opens the machine. Sits at index 0 so the loop reads open -> work -> shut -> open, and the
+   cut point is the ~640ms where nothing at all is moving. */
+SCENES.unshift({name:'Open',dur:1600,run(){
+  setLid(90,0);setShut(true);setDark(true);
+  chinBody.innerHTML=IDLE_CHIN;chin.classList.add('hide');
+  setLid(0,1000,'cubic-bezier(.3,.75,.25,1)',400,()=>{
+    setShut(false);                                   /* the edge hands over to the lid */
+    after(340,()=>{setDark(false);chin.classList.remove('hide')});  /* wakes on the way up */
+  });
+}});
 
 $('beats').innerHTML=SCENES.map((s,i)=>'<button class="beat" data-i="'+i+'"><span class="n">'+String(i+1).padStart(2,'0')+'</span>'+s.name+'</button>').join('');
 const beatEls=[...document.querySelectorAll('.beat')];
