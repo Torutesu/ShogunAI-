@@ -318,6 +318,121 @@ Product Hunt に ShogunAI を出しました ⚔
 そして正直なところ、こういうものを1週間つけっぱなしにできますか。できないとしたら、何が引っかかりますか。
 ```
 
+## 4.5 Connect with Investors（PHの投資家接続フォーム・非公開）
+
+> **前提**: この欄は公開されない（"This information will never be shared publicly"）。よって LP 向けの「競合名を出さない」規律は適用しない。**YC 出願（Fall 2026）と数字・主張を一致させる**——投資家は両方を見る可能性があり、食い違いが一番痛い。各欄の上限は5000字だが、**読み切れる長さ（800〜1,600字）で止める**。埋めるための水増しはしない。
+>
+> ⚠ 数字は YC 出願の記載を転記した（有料ユーザー約10名・$50–60/月・waitlist約500・広告費ゼロ・収益の約8割はホテルチェーン案件）。**提出時点の実数に更新してから出すこと。**
+
+### Q1. Why are you the right founder/team to work on this?
+
+**EN**
+```
+I'm a solo technical founder and I write essentially all of the code myself, working AI-natively with Claude Code and Codex. Three weeks ago I won the Y Combinator Hackathon in Japan; ShogunAI's core product was live within weeks of that — continuous desktop context capture, a persistent world model of the user's work, and execution over MCP — with paying users on it daily.
+
+Two things make me the right person for this specific problem. First, I am the user. I run my entire company — engineering, sales, recruiting, marketing — with AI at the center, so the cost of scattered context is something I pay personally every day. Every feature ships to me first; we run the company on ShogunAI. Second, the product demands an unusual combination: native macOS systems work, context modeling under real latency and privacy constraints, and consumer-grade product taste. I've spent months researching exactly this — desktop capture, MCP, local memory systems — before writing the first line.
+
+I was also selected as the youngest founder in Shido, the accelerator run by Japan's Ministry of Economy, Trade and Industry. I'm not looking for a cofounder: I can build, market, and sell, and I'd rather selectively hire a few obsessive specialists than split the helm.
+```
+
+**JA**
+> 私はソロの技術系ファウンダーで、コードは実質すべて自分で書いています（Claude Code と Codex を使った AI ネイティブな開発です）。3週間前に Y Combinator の日本ハッカソンで優勝し、その数週間後には ShogunAI のコアプロダクト——デスクトップ文脈の継続キャプチャ、仕事のワールドモデル、MCP 経由の実行——が動いていて、有料ユーザーが毎日使っています。
+>
+> この問題に対して自分が適任だと言える理由は2つあります。第一に、私自身がユーザーであること。開発・営業・採用・マーケティングのすべてを AI 中心で回しているので、文脈が散らばっていることのコストを毎日自分で払っています。新機能はまず自分に出荷し、会社自体を ShogunAI の上で運営しています。第二に、このプロダクトは珍しい組み合わせを要求すること。macOS ネイティブのシステム開発、レイテンシとプライバシー制約下での文脈モデリング、そしてコンシューマ級のプロダクト感覚。着手前の数か月、デスクトップキャプチャ・MCP・ローカルメモリをまさにこのために研究してきました。
+>
+> 経済産業省のアクセラレータ「Shido」には最年少ファウンダーとして採択されています。共同創業者は探していません。作ることも売ることも自分ででき、舵を分けるより、細部に執着する専門家を少数採用する方針です。
+
+### Q2. Why did you pick this idea to work on?
+
+**EN**
+```
+Two reasons — one structural, one personal.
+
+Structurally, I believe the context layer is where value accrues in the AI era. Models are already smart enough for most knowledge work; what they lack is the state of your work, which today is scattered across ChatGPT, Claude, Cursor, Slack, Notion, Gmail, browsers, desktop apps, and face-to-face meetings. The direction of construction only works one way: if you own the context layer, you can rebuild communication, knowledge management, CRM, and task management on top of it as AI-native applications. If you start from any single application, you can never reconstruct the full context afterward. That asymmetry is why I think this layer produces a generational company.
+
+Personally, it was my bottleneck. I work with AI at the center of everything, and the constraint was never model capability — it was that every AI started from zero and I re-explained the same background, decisions, and history across tools all day. Our principle is simple: live in the future, then build what's missing. This is the missing piece.
+
+We validated it the direct way: we ran our own company on it, put it in the hands of about ten intensely active paying users, and one of them was convinced enough to quit his job and join us.
+```
+
+**JA**
+> 理由は2つ。構造の話と、自分自身の話です。
+>
+> 構造的には、AI の時代に価値が溜まるのはコンテキスト層だと考えています。モデルの知能は大半の知的労働に対してもう足りていて、欠けているのは仕事の「状態」の方です。それは今、ChatGPT、Claude、Cursor、Slack、Notion、Gmail、ブラウザ、デスクトップアプリ、対面の会議に散らばっています。そして構築の方向は一方通行です。コンテキスト層を持っていれば、その上にコミュニケーション、ナレッジ管理、CRM、タスク管理を AI ネイティブに作り直せる。逆に、単一のアプリケーションから始めた場合、後から仕事の全文脈を再構成することはできません。この非対称性ゆえに、この層から世代を代表する会社が生まれると考えています。
+>
+> 個人的には、これが自分のボトルネックでした。すべての仕事を AI 中心で回している中で、制約はモデルの能力ではなく、どの AI もゼロから始まることでした。同じ背景、同じ決定、同じ経緯を一日中説明し直していた。私たちの原則はシンプルです——未来に住み、足りないものを作る。これが足りなかったものです。
+>
+> 検証は最短の方法でやりました。自分の会社をこの上で運営し、濃く使う有料ユーザー約10名に渡し、そのうちの一人は確信して会社を辞め、チームに加わりました。
+
+### Q3. Who are your competitors, and what do you understand about this idea that they don't?
+
+**EN**
+```
+Our competitors fall into four groups.
+
+Memory and context tools — Goldfish, Screenpipe, Littlebird, Unabyss. They record context but cannot execute work. Execution tools — Codex, Cursor, Dex, Aside. They execute, but only understand the context visible inside their own environment. AI-native collaboration products — PromptQL, Ando, Oasis. They aim at a "company brain," but only from conversations and documents that live inside their own platform. AI-native business applications — Monaco, Octolane, Origami. They rebuild CRM and GTM for the AI era, but each stays self-contained in its functional domain.
+
+What we understand that they don't: the context that matters doesn't live inside any application. It exists across everything done on a computer — AI conversations, the browser, documents, email, meetings, desktop apps — and much of it evaporates before it's ever typed into Slack or a CRM. So we build the layer, not another app. A context layer can host every AI-native application on top of it; the reverse construction is impossible.
+
+And on the "company brain": it isn't a product you build by collecting documents after the fact. Companies don't think — people do. It emerges when each individual's world model of their work connects under the right permissions. That's why we start with one person, and why the individual product isn't a wedge — it's the foundation.
+```
+
+**JA**
+> 競合は4つのグループに分かれます。
+>
+> 記憶・文脈系（Goldfish, Screenpipe, Littlebird, Unabyss）。文脈を記録しますが、仕事を実行できません。実行系（Codex, Cursor, Dex, Aside）。実行はできますが、自分の環境の中に見える文脈しか理解しません。AI ネイティブなコラボレーション系（PromptQL, Ando, Oasis）。「Company Brain」を狙っていますが、自社プラットフォーム内の会話と文書しか扱えません。AI ネイティブな業務アプリ系（Monaco, Octolane, Origami）。CRM や GTM を AI 時代に作り直していますが、それぞれ自分の職能領域に閉じています。
+>
+> 私たちが理解していて彼らが理解していないこと。価値のある文脈は、どのアプリケーションの中にも存在しません。それはコンピュータ上のすべての営み——AI との会話、ブラウザ、文書、メール、会議、デスクトップアプリ——にまたがって存在し、その多くは Slack や CRM に打ち込まれる前に蒸発します。だから私たちはアプリではなく層を作ります。コンテキスト層の上にはあらゆる AI ネイティブアプリを載せられますが、逆方向の構築は不可能です。
+>
+> そして「Company Brain」について。それは文書を後から集めて作るプロダクトではありません。会社は考えません。考えるのは人です。一人ひとりの仕事のワールドモデルが、適切な権限の下で接続されたときに、結果として立ち現れるものです。だから私たちは個人から始めます。個人向けプロダクトはくさびではなく、土台そのものです。
+</br>
+
+### Q4. What's your revenue and/or growth rate?
+
+**EN**
+```
+Being precise, because the honest version is more interesting than the inflated one.
+
+ShogunAI itself is weeks old. We won the YC Hackathon in Japan, started building immediately, and today have around 10 paying users at $50–60/month — all of them daily actives, deliberately capped while we iterate with them at high intensity. Nearly 500 people have joined the waitlist with zero ad spend, and we get 5–10 inbound DMs a day asking for access.
+
+The company behind it (Select, Inc.) is revenue-generating: roughly $32K in June 2026, up from $4–6K/month earlier in the year. About 80% of that comes from a price-optimization project for a large hotel chain, with the remainder from product work and ShogunAI subscriptions. That services revenue funds the runway; it is not the business we're building.
+
+The growth motion we're running: keep a small circle of intense paying users, convert the waitlist in waves as quality allows, and launch team plans once individual retention proves out. Our internal targets are aggressive — we're aiming for seven-figure net ARR within the next several months — and this launch is one of the levers.
+```
+
+**JA**
+> 正確に書きます。盛った版より、正直な版の方が面白い数字なので。
+>
+> ShogunAI 自体はまだ生まれて数週間です。YC の日本ハッカソンで優勝して即座に作り始め、現在は月額 $50–60 の有料ユーザーが約10名。全員が毎日使っていて、高密度で一緒に改善するために人数は意図的に絞っています。ウェイトリストには広告費ゼロで500名弱が登録し、アクセスを求める DM が毎日5〜10件届きます。
+>
+> 運営会社（Select, Inc.）には売上があります。2026年6月で約 $32K、年初の月 $4–6K から伸びています。うち約8割は大手ホテルチェーンの価格最適化プロジェクトで、残りがプロダクト業務と ShogunAI のサブスクリプションです。この受託収益はランウェイの原資であって、私たちが作っている事業ではありません。
+>
+> いま回しているグロースの型はこうです。濃い有料ユーザーの小さな輪を保ち、品質が許す範囲でウェイトリストを段階的に転換し、個人のリテンションが証明でき次第チームプランを出す。社内目標は攻めていて、数か月以内にネット ARR 7桁（$1M台）を狙っています。このローンチはそのレバーの一つです。
+
+### Q5. Anything else you would like investors to know?
+
+**EN**
+```
+Three things.
+
+The strongest signal we have isn't a metric: one of our earliest users was convinced enough to quit his job and join the team this August. That's what this product does to the people who run their day on it.
+
+The roadmap is individual → team → enterprise, plus an infrastructure lane. Shared context is worth more than private context, and most stuck work is stuck between people — so team plans with permissions and a shared work model come next, then enterprise controls. Because execution is MCP-native, there's also a usage-based lane: other AI systems paying to read from ShogunAI as their persistent context layer.
+
+On structure: Select, Inc. (Japan), founder holds 90%, one pre-seed investor (THESEED) holds 10%. We haven't been actively fundraising — this launch is the natural moment to start those conversations, and we'd rather meet investors who believe the context layer is the most structurally valuable position in the AI stack. Base is San Francisco with a deliberate Japan presence for hiring and brand — including building from a Kyoto machiya, because in a commoditizing market, being unmistakable is a strategy.
+```
+
+**JA**
+> 3点あります。
+>
+> 私たちが持っている最強のシグナルは指標ではありません。最初期のユーザーの一人が確信して会社を辞め、この8月にチームに加わります。一日をこの上で回している人に、このプロダクトはそういう作用をします。
+>
+> ロードマップは、個人 → チーム → エンタープライズ、そしてインフラの車線です。共有された文脈は個人の文脈より価値が高く、止まっている仕事のほとんどは人と人の間で止まっています。だから次は権限と共有ワークモデルを備えたチームプラン、その先にエンタープライズ向けの統制です。実行が MCP ネイティブなので、従量の車線もあります。他の AI システムが ShogunAI を永続的なコンテキスト層として読むことに課金する形です。
+>
+> 体制について。Select, Inc.（日本法人）、ファウンダーが90%、プレシードの THESEED が10%を保有しています。これまで能動的な資金調達はしておらず、このローンチがその対話を始める自然なタイミングだと考えています。会いたいのは、コンテキスト層が AI スタックの中で構造的に最も価値のあるポジションだと信じる投資家です。拠点はサンフランシスコで、採用とブランドのために日本にも意図的な足場を置きます。京都の町家から作る、というのもその一つです。コモディティ化する市場では、見間違えようがないことが戦略になります。
+
+---
+
 ## 5. 中盤に落とす Maker follow-up
 
 投げっぱなしにしない。**一本ごとに違う層へ届ける**——(a) は作る人、(b) は使う人、(c) は疑う人。
