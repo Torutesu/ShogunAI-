@@ -48,14 +48,14 @@ export const metadata: Metadata = {
     title: `${siteConfig.name} — ${siteConfig.tagline}`,
     description: siteConfig.description,
     url: siteConfig.url,
-    images: [{ url: '/og-image.png', width: 1200, height: 630, alt: 'ShogunAI' }],
+    images: [{ url: '/og-image.png?v=20260821', width: 1200, height: 630, alt: 'ShogunAI — Your personal AGI on your PC.' }],
   },
   twitter: {
     card: 'summary_large_image',
     site: siteConfig.twitter,
     title: `${siteConfig.name} — ${siteConfig.tagline}`,
     description: siteConfig.description,
-    images: ['/og-image.png'],
+    images: ['/og-image.png?v=20260821'],
   },
   robots: { index: true, follow: true },
 };

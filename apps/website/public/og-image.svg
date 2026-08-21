@@ -1,24 +1,44 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
-  <title id="title">ShogunAI - Your AI has memory. Now it acts.</title>
-  <desc id="desc">One memory across every tool. Private by default.</desc>
+  <title id="title">ShogunAI — Your personal AGI on your PC.</title>
+  <desc id="desc">Built to finish real work.</desc>
   <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#dce5ff"/>
-      <stop offset=".46" stop-color="#f4f7ff"/>
-      <stop offset="1" stop-color="#ffffff"/>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7f9ff"/>
+      <stop offset="0.52" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f5f1e8"/>
     </linearGradient>
-    <radialGradient id="cloud" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#fff" stop-opacity=".95"/>
-      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    <radialGradient id="blueGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#7ba1ff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#7ba1ff" stop-opacity="0"/>
     </radialGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#004cfc" flood-opacity=".2"/>
+    <radialGradient id="goldGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#e4c27b" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#e4c27b" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="markShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#004cfc" flood-opacity="0.18"/>
     </filter>
   </defs>
-  <rect width="1200" height="630" fill="url(#sky)"/>
-  <circle cx="1040" cy="-20" r="350" fill="url(#cloud)"/>
-  <circle cx="-60" cy="635" r="310" fill="url(#cloud)" opacity=".72"/>
-  <g transform="translate(945 76) scale(.18)" fill="#004CFC" filter="url(#shadow)">
+
+  <rect width="1200" height="630" fill="url(#background)"/>
+  <circle cx="1020" cy="84" r="360" fill="url(#blueGlow)"/>
+  <circle cx="220" cy="660" r="390" fill="url(#goldGlow)"/>
+
+  <g transform="translate(80 68)">
+    <g transform="scale(.045)" fill="#004CFC">
+      <path d="M296 254 L469 0 L469 525 Z"/>
+      <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+      <path d="M62 613 L171 413 L331 493 Z"/>
+      <g transform="translate(957,0) scale(-1,1)">
+        <path d="M296 254 L469 0 L469 525 Z"/>
+        <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+        <path d="M62 613 L171 413 L331 493 Z"/>
+      </g>
+    </g>
+    <text x="58" y="31" fill="#0b1738" font-family="Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="-1">ShogunAI</text>
+  </g>
+
+  <g transform="translate(916 82) scale(.18)" fill="#004CFC" filter="url(#markShadow)">
     <path d="M296 254 L469 0 L469 525 Z"/>
     <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
     <path d="M62 613 L171 413 L331 493 Z"/>
@@ -28,16 +48,12 @@
       <path d="M62 613 L171 413 L331 493 Z"/>
     </g>
   </g>
-  <text x="80" y="275" fill="#0b1b43" font-family="Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-4">Your AI has memory.</text>
-  <text x="80" y="352" fill="#004cfc" font-family="Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-4">Now it acts.</text>
-  <text x="83" y="409" fill="#536a9e" font-family="Arial, sans-serif" font-size="27">One memory across every tool. Private by default.</text>
-  <g transform="translate(80 475)">
-    <rect width="300" height="54" rx="27" fill="#fff" fill-opacity=".57" stroke="#fff" stroke-opacity=".82"/>
-    <circle cx="27" cy="27" r="5" fill="#004cfc"/>
-    <text x="45" y="34" fill="#27427e" font-family="Arial, sans-serif" font-size="20" font-weight="700">486 people have joined</text>
-  </g>
-  <g transform="translate(396 475)">
-    <rect width="218" height="54" rx="27" fill="#fff" fill-opacity=".3" stroke="#fff" stroke-opacity=".68"/>
-    <text x="24" y="34" fill="#536a9e" font-family="Arial, sans-serif" font-size="20" font-weight="700">First 10,000 only</text>
-  </g>
+
+  <text x="80" y="292" fill="#0b1738" font-family="Arial, sans-serif" font-size="70" font-weight="700" letter-spacing="-3.6">Your personal AGI</text>
+  <text x="80" y="374" fill="#004cfc" font-family="Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-4">on your PC.</text>
+  <text x="83" y="438" fill="#50617f" font-family="Arial, sans-serif" font-size="27">Built to finish real work.</text>
+
+  <line x1="80" y1="528" x2="1120" y2="528" stroke="#b9c8ee" stroke-opacity="0.65"/>
+  <text x="80" y="570" fill="#455676" font-family="Arial, sans-serif" font-size="20" font-weight="600">On your machine. On your own plan.</text>
+  <text x="1120" y="570" fill="#64718a" font-family="Arial, sans-serif" font-size="20" text-anchor="end">shogunaios.com</text>
 </svg>

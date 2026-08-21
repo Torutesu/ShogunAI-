@@ -5,7 +5,7 @@ export const alt = `${siteConfig.name} — ${siteConfig.tagline}`;
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
-/** Dynamic Open Graph image. Self-contained (no external assets). */
+/** Dynamic Open Graph fallback. Keep it aligned with public/og-image.png. */
 export default function OpengraphImage() {
   return new ImageResponse(
     (
@@ -17,7 +17,7 @@ export default function OpengraphImage() {
           flexDirection: 'column',
           justifyContent: 'center',
           padding: '80px',
-          background: 'linear-gradient(135deg, #d8f6ff 0%, #f7fdff 45%, #ffffff 100%)',
+          background: 'linear-gradient(135deg, #f7f9ff 0%, #ffffff 52%, #f5f1e8 100%)',
           fontFamily: 'sans-serif',
         }}
       >
@@ -41,6 +41,8 @@ export default function OpengraphImage() {
         <div
           style={{
             marginTop: 40,
+            display: 'flex',
+            flexDirection: 'column',
             fontSize: 68,
             fontWeight: 700,
             lineHeight: 1.05,
@@ -49,9 +51,10 @@ export default function OpengraphImage() {
             maxWidth: 900,
           }}
         >
-          Your personal AGI on your PC.
+          <span>Your personal AGI</span>
+          <span style={{ color: '#004cfc' }}>on your PC.</span>
         </div>
-        <div style={{ marginTop: 28, fontSize: 30, color: '#5f6b73' }}>
+        <div style={{ marginTop: 28, fontSize: 30, color: '#50617f' }}>
           Built to finish real work.
         </div>
       </div>
