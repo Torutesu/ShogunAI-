@@ -379,40 +379,62 @@ html[data-theme='dark'] .theme-light-badge {
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
-/* The panel used to drift on a 7s loop, which was fine while it was a picture.
- * It is a control surface now — buttons that never hold still are buttons that
- * are hard to hit — so it only drifts until the visitor reaches for it. */
-.hero-demo-shell {
-  animation: hero-demo-float 7s ease-in-out infinite;
+.hero-video-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.hero-demo-shell:hover,
-.hero-demo-shell:focus-within {
-  animation-play-state: paused;
+.hero-video-shell {
+  position: relative;
+  isolation: isolate;
+  width: min(100%, 720px);
+  aspect-ratio: 1200 / 904;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .hero-demo-shell {
-    animation: none;
-  }
+.hero-video-ambient {
+  position: absolute;
+  inset: 10% 4% 8%;
+  z-index: -1;
+  border-radius: 48%;
+  background: rgba(28, 57, 126, 0.38);
+  filter: blur(44px);
+  opacity: 0.7;
 }
 
-.hero-demo-scale {
-  /* Width is 1/scale, so the painted box is exactly the frame's width — but
-   * only if the anchored edge is the one that starts inside the frame. With
-   * `top right` the untransformed right edge sat past the container and the
-   * shot bled off-screen on narrower laptops. */
-  transform-origin: top left;
+.hero-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: saturate(0.96) contrast(1.03);
+  -webkit-mask-image:
+    linear-gradient(to bottom, transparent 0%, #000 8%, #000 91%, transparent 100%),
+    linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to bottom, transparent 0%, #000 8%, #000 91%, transparent 100%),
+    linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
+  mask-composite: intersect;
+}
+
+html:not([data-theme='dark']) .hero-video-shell {
+  filter: drop-shadow(0 30px 70px rgba(13, 42, 108, 0.2));
+}
+
+html:not([data-theme='dark']) .hero-video-ambient {
+  background: rgba(64, 102, 195, 0.3);
+  opacity: 0.56;
+}
+
+html[data-theme='dark'] .hero-video-ambient {
+  background: rgba(65, 94, 190, 0.28);
+  opacity: 0.72;
 }
 
 @media (min-width: 1024px) and (max-height: 760px) {
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 380px;
-  }
-
-  .hero-demo-scale {
-    width: 142.857%;
-    transform: scale(0.7);
   }
 }
 
@@ -425,13 +447,8 @@ html[data-theme='dark'] .theme-light-badge {
     padding-bottom: 8px;
   }
 
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 500px;
-  }
-
-  .hero-demo-scale {
-    width: 111.111%;
-    transform: scale(0.9);
   }
 
   .hero-badges {
@@ -443,13 +460,8 @@ html[data-theme='dark'] .theme-light-badge {
 /* Keep the full desktop hero—including its proof badges—inside shorter
  * laptop/tablet viewports without changing the spacious wide layout. */
 @media (min-width: 701px) and (max-width: 1100px) and (max-height: 820px) {
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 500px;
-  }
-
-  .hero-demo-scale {
-    width: 111.111%;
-    transform: scale(0.9);
   }
 }
 
@@ -473,13 +485,8 @@ html[data-theme='dark'] .theme-light-badge {
     padding-bottom: 4px;
   }
 
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 430px;
-  }
-
-  .hero-demo-scale {
-    width: 125%;
-    transform: scale(0.8);
   }
 
   .hero-badges {
@@ -503,13 +510,8 @@ html[data-theme='dark'] .theme-light-badge {
     padding-bottom: 4px;
   }
 
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 372px;
-  }
-
-  .hero-demo-scale {
-    width: 133.333%;
-    transform: scale(0.75);
   }
 
   .hero-badges {
@@ -731,15 +733,6 @@ html[data-theme='dark'] .theme-light-badge {
     transform: translate3d(16px, -8px, 0);
   }
 }
-@keyframes hero-demo-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-7px);
-  }
-}
 @keyframes marquee {
   from {
     transform: translateX(0);
@@ -884,7 +877,6 @@ html[data-theme='dark'] .theme-light-badge {
   .orb,
   .animate-floaty,
   .marquee-track,
-  .hero-demo-shell,
   .campaign-bar,
   .campaign-shine,
   .campaign-spark {

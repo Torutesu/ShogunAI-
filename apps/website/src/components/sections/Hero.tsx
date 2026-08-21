@@ -1,9 +1,7 @@
-import { ArrowRight, Check, Command, Play, Sparkles } from 'lucide-react';
 import { ParticipantCount } from '@/components/ParticipantCount';
 import { Badges } from '@/components/sections/Badges';
-import { HeroDemo } from '@/components/HeroDemo';
+import { HeroVideo } from '@/components/HeroVideo';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { WaitlistForm } from '@/components/WaitlistForm';
 import type { Dictionary } from '@/i18n/dictionaries';
 
@@ -15,12 +13,6 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
       : t.nav.langLabel === 'Sprache'
         ? { waitlistProof: 'Gerade in vollem Gange', preview: 'LIVE-PRODUKT', people: 'Teilnehmende am Early Access' }
         : { waitlistProof: 'Buzzing right now', preview: 'LIVE PRODUCT', people: 'Early-access participants' };
-  const activity = [
-    { label: t.hero.mockRow1, time: '10:42', icon: 'M' },
-    { label: t.hero.mockRow2, time: '10:38', icon: 'D' },
-    { label: t.hero.mockRow3, time: '10:31', icon: 'S' },
-  ];
-
   return (
     <section className="hero-shell relative isolate overflow-hidden">
       <div aria-hidden="true" className="hero-overlay absolute inset-0 -z-20" />
@@ -85,12 +77,8 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
           </div>
           </div>
 
-          <div className="hero-demo-frame order-4 w-full min-w-0 max-w-[1320px] lg:order-2 lg:justify-self-end">
-            <div className="hero-demo-scale w-full">
-              {/* The notch panel itself, running its own mock fixture outside Tauri —
-                * the real surface, not a drawing of it. */}
-              <HeroDemo d={t.heroDemo} cta={t.nav.getStarted} live={localeCopy.preview} macos="ShogunAI for macOS" />
-            </div>
+          <div className="hero-video-frame order-4 w-full min-w-0 max-w-[1320px] lg:order-2 lg:justify-self-end">
+            <HeroVideo label={`${localeCopy.preview} — ShogunAI for macOS`} />
           </div>
 
           <div className="hero-badges order-2 mt-5 lg:order-3 lg:col-span-2 lg:mt-9">
