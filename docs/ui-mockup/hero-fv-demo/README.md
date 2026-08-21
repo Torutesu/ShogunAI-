@@ -18,7 +18,7 @@ Product Hunt ローンチ と LP ファーストビューのための、**操作
 | `index.html` | 生成物（自己完結・外部リクエストなし）。直接編集しない |
 | `wallpaper.jpg` | 本物の macOS Sequoia Light 標準壁紙（6K 原本を FV 比率にクロップ・縮小） |
 | `dock.png` | **任意。置けば実物の Dock に差し替わる**（後述）。無ければ下記の混成版が使われる |
-| `logos/` | 実ブランドマークの SVG（Slack / Notion / Figma / Chrome / LINE / Gemini）。出典は `logos/SOURCES.md` |
+| `logos/` | 実ブランドマーク。App Store の公開アートワーク20個＋Commons の SVG 3個。出典と再取得は `logos/SOURCES.md` / `logos/fetch_appstore.py` |
 | `shogun-agi-30s.mp4` | **完成品のループ動画**（30.8s / 1512×982 / H.264 / 4.0MB） |
 | `shogun-agi-30s-1200.mp4` | 同・幅1200版（1.7MB）。LP 埋め込みはこちら推奨 |
 
@@ -28,13 +28,20 @@ sibling asset ではなく data URI で入れている。`index.html` は生成�
 
 ## Dock のアイコン
 
-**実ロゴが6つ入っている**: Slack / Notion / Figma / Chrome / LINE / Gemini。
-いずれも Wikimedia Commons の自由ライセンス版を `logos/` に置き、SVG のまま埋め込んでいる
-（出典は `logos/SOURCES.md`）。
+**34枚中23枚が本物**。内訳と取得方法は `logos/SOURCES.md`、再取得は `logos/fetch_appstore.py`。
 
-**Apple 製アプリは描画版のまま**。Finder / Safari / Mail / Calendar などのアイコンは
-非自由ライセンスで Commons に無く、取得できなかった。形は寄せてあるが本物ではない。
-Discord・Raycast・Warp なども同様に取得できず描画版。
+- **App Store の公開アートワーク（20）** — Safari / Messages / Mail / Maps / Photos / FaceTime /
+  Calendar / Contacts / Reminders / Notes / Music / Freeform / Keynote / Numbers / Pages /
+  Slack / LINE / Notion / Discord / Raycast。`itunes.apple.com/search` から 512px を取り、
+  128px に落として **macOS の squircle（superellipse n=5）でマスク**して埋めている
+- **Wikimedia Commons の SVG（3）** — Chrome / Gemini / Figma
+
+**まだ描画版なのは 11 枚**: Finder / Launchpad / App Store / System Settings / ゴミ箱
+（macOS にバンドルされていてどのストアにも無い）、Arc / Warp / Terminal、および Dock 内の
+未同定の数枚。形は寄せてあるが本物ではない。
+
+Calendar だけは注意: App Store のアートワークは日付が焼き込み（`Tue 1`）で、実機の
+macOS は当日の日付を描く。デモでは静止画として扱っている。
 
 全部を本物にしたい場合は次項でスクショごと差し替える。
 
@@ -119,7 +126,9 @@ corroboration 上限 0.75 で **High には決して届かない**。デモの�
    （同梱 mp4 は暗転の中心どうしで切ってある）
 4. ヘッドレス再録するなら `?capture=1` で 1512×982 ぴったりのステージのみになる。
    **注意**: Playwright の recordVideo は負荷でタイムラインが約1.1倍に伸びる。
-   同梱 mp4 は `setpts` で意図した尺へ戻してある（今回は 0.871。伸びたまま出さないこと）
+   同梱 mp4 は `setpts` で意図した尺へ戻してある（今回は 0.89793 = 30.817s ÷ 34.320s。
+   係数は撮るたびに変わるので、**ページ側の実測ループ長 `window.__loops` と録画の実尺から
+   毎回出し直す**こと。伸びたまま出さない）
 5. FV が 16:9 なら **16:9 guide** で切れる上下を先に確認
 
 | キー | |
