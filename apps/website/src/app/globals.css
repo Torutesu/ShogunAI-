@@ -389,7 +389,7 @@ html[data-theme='dark'] .theme-light-badge {
   position: relative;
   isolation: isolate;
   width: min(100%, 740px);
-  aspect-ratio: 1200 / 904;
+  aspect-ratio: 960 / 724;
 }
 
 .hero-video {
@@ -398,20 +398,6 @@ html[data-theme='dark'] .theme-light-badge {
   height: 100%;
   object-fit: contain;
   filter: saturate(0.96) contrast(1.03);
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent 0%,
-    #000 1%,
-    #000 99%,
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to right,
-    transparent 0%,
-    #000 1%,
-    #000 99%,
-    transparent 100%
-  );
 }
 
 @media (min-width: 1024px) and (max-height: 760px) {
