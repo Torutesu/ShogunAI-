@@ -1,4 +1,4 @@
-# Design QA — Hero MacBook opening sequence
+# Design QA — Hero MacBook product demo
 
 ## Evidence
 
@@ -12,13 +12,15 @@
 - Before/after alpha-edge comparison: `/tmp/shogun-alpha-compare.png`
 - Hardened local opening state: `/tmp/shogun-alpha-local-opening.jpg`
 - Hardened local open-product state: `/tmp/shogun-alpha-local-open2.jpg`
+- Same-viewport black-transition before/open-product after comparison: `/tmp/shogun-hero-black-before-after.jpg`
+- Latest local open-product state: `/tmp/shogun-hero-after-open.jpg`
 - Current review viewport: 1280 × 720; prior full-layout review viewport: 1440 × 900
 
 ## Intentional change
 
-The first view keeps the existing Kyoto artwork, palette, copy, form, and proof badges unchanged. Only the product-film presentation changes: it begins as a closed MacBook, opens into the supplied live product demo, and then loops from the useful open-product state rather than closing again on every cycle.
+The first view keeps the existing Kyoto artwork, palette, copy, form, and proof badges unchanged. Only the product-film presentation changes: it begins directly in the supplied live product demo and loops without replaying the dark opening transition.
 
-The original film's dark rectangular backdrop is removed in browser-specific alpha-channel renditions: HEVC with alpha for Safari and VP9 with alpha for Chromium/Firefox. The alpha edge is hardened so low-opacity black spill from the source shadow cannot move across the page while the MacBook opens. A transparent closed-MacBook poster covers metadata loading, so the page background remains continuous before playback begins. The opaque MP4 fallback is intentionally removed; an unsupported browser keeps the transparent poster instead of revealing the moving black rectangle.
+The original film's dark rectangular backdrop is removed in browser-specific alpha-channel renditions: HEVC with alpha for Safari and VP9 with alpha for Chromium/Firefox. The alpha edge is hardened, and the first four seconds are physically trimmed from both sources so the black closed-screen surface cannot move across the page in any browser or loading state. A transparent open-product poster covers metadata loading. The opaque MP4 fallback remains intentionally absent.
 
 The Product Hunt proof badge now uses the official Featured widget supplied by the user, with its exact destination, image URL, 250 × 54 intrinsic dimensions, and product description.
 
@@ -29,17 +31,17 @@ The Product Hunt proof badge now uses the official Featured widget supplied by t
 - P2: none; the prior moving black edge halo is removed
 - P3: none blocking handoff
 
-The combined comparison confirms that the source film's laptop silhouette, bezel, opening motion, and product UI remain recognizable. In the implementation, the MacBook sits directly on the existing atmospheric hero without a dark video rectangle, card shell, ambient glow, or replacement background. The open product state stays the dominant right-column object and does not collide with the header, proof badges, or first logo row.
+The same-viewport comparison confirms that the moving black screen is absent while the laptop silhouette, bezel, and product UI remain recognizable. The MacBook sits directly on the existing atmospheric hero without a dark video rectangle, card shell, ambient glow, or replacement background. The open product state stays the dominant right-column object and does not collide with the header, proof badges, or first logo row.
 
 ## Responsive, interaction, and state checks
 
 - Desktop light, 1440 × 900: transparent MacBook media is fully visible and produces no horizontal overflow.
 - Desktop dark, 1440 × 900: the same alpha media renders without introducing a separate background block.
-- Initial loading: a 1200 × 904 transparent PNG shows the closed MacBook immediately.
-- First playback: begins at 0 seconds so the physical opening motion is visible.
-- Subsequent playback: loops from 4 seconds, avoiding a repetitive close/open reset.
-- Reduced motion: seeks to the open-product preview at 4 seconds and pauses.
-- Chromium compatibility: the browser selected the VP9 alpha WebM, reached ready state 4, and played the full opening sequence.
+- Initial loading: a transparent PNG shows the open product immediately.
+- First playback: begins at the useful product-demo state; the dark opening transition is not present in the media file.
+- Subsequent playback: loops from the same open-product state.
+- Reduced motion: keeps the open-product poster/first frame and pauses.
+- Chromium compatibility: the browser selected the trimmed VP9 alpha WebM, reached ready state 4, and played continuously from the open-product frame.
 - Safari compatibility: AVFoundation decoded the HEVC `hvc1` MOV with alpha extrema 0–255 and transparent corner pixels.
 - Hardened Safari alpha: at 1 second the visible silhouette begins at x=20 instead of leaking to the frame edge, and all pixels outside the MacBook remain transparent.
 - Unsupported-video fallback: the transparent poster remains visible; there is no opaque video source.
@@ -58,5 +60,6 @@ The combined comparison confirms that the source film's laptop silhouette, bezel
 7. Added Safari-native HEVC alpha, removed the opaque MP4 fallback, and verified the complete opening motion in the in-app browser.
 8. Replaced the Product Hunt review badge with the official Featured widget.
 9. Removed the remaining moving black halo by tightening the HEVC/VP9 alpha silhouette and cache-busting all three hero media assets.
+10. Removed the dark opening segment itself, made the open product the loading poster, and trimmed both browser video sources so the black screen can no longer replay.
 
 final result: passed
