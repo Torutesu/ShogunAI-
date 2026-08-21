@@ -67,5 +67,18 @@ The same-viewport comparison confirms that the original black slab no longer tra
 9. Removed the remaining moving black halo by tightening the HEVC/VP9 alpha silhouette and cache-busting all three hero media assets.
 10. Temporarily removed the dark opening segment and used the open product as the loading poster.
 11. Restored the closed-PC opening, kept the moving dark lid plane transparent, faded the complete screen in from 2.05 to 2.3 seconds, and made later loops resume at four seconds.
+12. Restored the localized live waitlist count beside the participant avatars, with a stable server fallback and an API refresh on page load and after successful signup.
+
+## Live participant count QA
+
+- Public before: `/tmp/shogun-count-before.jpg`
+- Local after: `/tmp/shogun-count-after.jpg`
+- Same-viewport comparison: `/tmp/shogun-count-before-after.jpg`
+- Review viewport: 1280 × 720
+- The count pill replaces the non-numeric "buzzing" label without changing the avatar stack, form width, badge row, or hero grid.
+- The localized number and suffix fit in Japanese at the reviewed desktop width without wrapping or overlapping adjacent content.
+- The component renders the server fallback immediately to avoid layout shift, then refreshes from `/api/waitlist/count` with `cache: 'no-store'`.
+- A successful waitlist submission dispatches a local refresh event so the displayed total is reconciled with the durable public count.
+- The public count endpoint returned `523` with `fresh: true` during this review.
 
 final result: passed

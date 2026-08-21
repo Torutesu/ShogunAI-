@@ -68,6 +68,7 @@ export function WaitlistForm({
       setState('idle');
       setEmail('');
       setMsg(labels.okListed);
+      window.dispatchEvent(new Event('waitlist:updated'));
     } catch {
       setState('error');
       setMsg(labels.errNetwork);

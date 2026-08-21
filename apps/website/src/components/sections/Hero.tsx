@@ -1,17 +1,18 @@
 import { Badges } from '@/components/sections/Badges';
 import { HeroVideo } from '@/components/HeroVideo';
+import { ParticipantCount } from '@/components/ParticipantCount';
 import { Badge } from '@/components/ui/badge';
 import { WaitlistForm } from '@/components/WaitlistForm';
 import type { Dictionary } from '@/i18n/dictionaries';
 
-export function Hero({ t }: { t: Dictionary; participantCount: number }) {
+export function Hero({ t, participantCount }: { t: Dictionary; participantCount: number }) {
   const localeCopy = t.nav.langLabel === '言語'
-    ? { waitlistProof: '熱狂中', preview: 'ライブ製品', people: 'アーリーアクセス参加者' }
+    ? { locale: 'ja-JP', preview: 'ライブ製品', people: 'アーリーアクセス参加者' }
     : t.nav.langLabel === 'Idioma'
-      ? { waitlistProof: 'En plena ebullición', preview: 'PRODUCTO EN VIVO', people: 'Participantes del acceso anticipado' }
+      ? { locale: 'es-ES', preview: 'PRODUCTO EN VIVO', people: 'Participantes del acceso anticipado' }
       : t.nav.langLabel === 'Sprache'
-        ? { waitlistProof: 'Gerade in vollem Gange', preview: 'LIVE-PRODUKT', people: 'Teilnehmende am Early Access' }
-        : { waitlistProof: 'Buzzing right now', preview: 'LIVE PRODUCT', people: 'Early-access participants' };
+        ? { locale: 'de-DE', preview: 'LIVE-PRODUKT', people: 'Teilnehmende am Early Access' }
+        : { locale: 'en-US', preview: 'LIVE PRODUCT', people: 'Early-access participants' };
   return (
     <section className="hero-shell relative isolate overflow-hidden">
       <div aria-hidden="true" className="hero-overlay absolute inset-0 -z-20" />
@@ -66,7 +67,7 @@ export function Hero({ t }: { t: Dictionary; participantCount: number }) {
                     +
                   </span>
                 </div>
-                <span className="hero-waitlist-proof text-xs font-medium text-[#4b5d7d]">{localeCopy.waitlistProof}</span>
+                <ParticipantCount initialCount={participantCount} locale={localeCopy.locale} suffix={t.scarcity.joinedSuffix} />
               </div>
               <div className="mx-auto mt-6 max-w-[520px] lg:mx-0">
                 <WaitlistForm labels={t.waitlist} />
