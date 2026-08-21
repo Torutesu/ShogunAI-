@@ -398,14 +398,6 @@ html[data-theme='dark'] .theme-light-badge {
   height: 100%;
   object-fit: contain;
   filter: saturate(0.96) contrast(1.03);
-  -webkit-mask-image:
-    linear-gradient(to bottom, transparent 0%, #000 8%, #000 91%, transparent 100%),
-    linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
-  -webkit-mask-composite: source-in;
-  mask-image:
-    linear-gradient(to bottom, transparent 0%, #000 8%, #000 91%, transparent 100%),
-    linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
-  mask-composite: intersect;
 }
 
 @media (min-width: 1024px) and (max-height: 760px) {
