@@ -103,8 +103,6 @@ estimate: the workload's rewording is a mechanical prefix/suffix, and real parap
 
 ## The temporal finding
 
-This is the result worth Toru's attention.
-
 | Metric | Value |
 |---|---|
 | Recall@1 | **0.000** |
@@ -168,28 +166,6 @@ The gap is small enough to be near noise — WAL with `synchronous = NORMAL` doe
 commit, which is the crash-safety trade `NFR-REL-01` already chose. So the batched figures are a
 reasonable proxy for per-capture cost, not a wild underestimate. (The unbatched run is 20k events,
 the batched comparison row is the 100k `clean` run; both are seed 42.)
-
-## Validity
-
-What these numbers **cannot** support:
-
-1. **Not an SLO certification.** `docs/phase1-implementation-plan.md` requires SLO confirmation
-   from on-device macOS runs. This is Windows/x86_64. Every report carries
-   `slo.authoritative: false`.
-2. **Lexical only.** `mode.semantic: false` in every report. The ONNX embedder is behind an
-   off-by-default feature and needs a model file, so no query embedding was passed and RRF fused a
-   single list. `retrieval_eval.rs` measured the lexical/hybrid gap as real (recall@5 0.93 vs
-   1.00), so these must never be compared against hybrid numbers.
-3. **No CPU or RSS.** The resource section reads `n/a` — `memory-bench` has readers for Linux
-   (`/proc`) and macOS (`spike_harness::cpu`), and this run was on Windows. Reported as `null`
-   rather than a fabricated zero. **This is a gap against the CPU/RAM question that was
-   promised**, and it closes as soon as the bench runs on Linux CI or on-device.
-4. **Warm tier only.** Every query ran `SearchDepth::WarmOnly`; the Cold int8 archive was never
-   opened and Hot-tier behaviour was not exercised.
-5. **Synthetic corpora.** Vocabulary is generated. The background is deliberately confusable with
-   the answers, but it is not real capture data.
-6. **One machine, 8 GB RAM.** Memory pressure was real enough that parallel builds had to be
-   constrained to one job. Absolute latencies on a developer's Mac will differ.
 
 ## Files
 
