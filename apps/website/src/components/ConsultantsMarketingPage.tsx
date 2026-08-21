@@ -10,6 +10,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import { CaseCards, type CaseLabels } from '@/components/CaseCards';
 import type { Locale } from '@/i18n/config';
 import type { MarketingDetail } from '@/lib/marketing-content';
 
@@ -32,6 +33,7 @@ type UseCaseCopy = {
   heroEyebrow: string;
   heroTitle: string;
   heroAccent: string;
+  heroBody: string;
   heroCta: string;
   proof: readonly [string, string, string];
   comparisonEyebrow: string;
@@ -51,15 +53,16 @@ type UseCaseCopy = {
 
 const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
   en: {
-    heroEyebrow: 'AI-powered client work',
-    heroTitle: 'Every client context, in one',
-    heroAccent: 'private memory',
+    heroEyebrow: 'A day across clients',
+    heroTitle: 'Every switch costs you the time to',
+    heroAccent: 'load it all back in',
+    heroBody: 'Where did this project get to. What did the last one bill and how many days did it really take. What phrasing did this client dislike once before. Some days, going back to remember takes longer than the work itself.',
     heroCta: 'Get early access',
     proof: ['Local-first memory', 'Bring your own AI', 'Approval before sending'],
-    comparisonEyebrow: 'A day across clients',
-    comparisonTitle: 'The time you spend switching, gone',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'Not ten percent better. Ten times, a hundred times.',
     comparisonBody:
-      'Five moments from a day spent across several clients. On the left, today. On the right, the same day with ShogunAI in it.',
+      'Five moments from a day spent across several clients. Open a card to swap today for the same day with ShogunAI in it.',
     cases: [
       {
         title: 'Switching between clients',
@@ -126,15 +129,16 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     finalCta: 'Get early access',
   },
   ja: {
-    heroEyebrow: 'AIで進める顧客業務',
-    heroTitle: 'すべての顧客文脈を、ひとつの',
-    heroAccent: 'プライベートな記憶へ',
+    heroEyebrow: '案件をまたぐ1日',
+    heroTitle: '案件を切り替えるたび、',
+    heroAccent: '頭に読み込み直す時間が消えていく',
+    heroBody: 'この案件はどこまで進んだか。前回いくらで受けて何日かかったか。この人が過去に嫌がった表現は何か。思い出すために遡る時間が、手を動かす時間より長い日がある。',
     heroCta: '早期アクセスを申し込む',
     proof: ['ローカルファースト', '利用するAIを選択', '送信前に承認'],
-    comparisonEyebrow: '案件をまたぐ1日',
-    comparisonTitle: '切り替えのたびに払っていた時間が、なくなる',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: '10%の改善ではない。10X、100Xの話だ。',
     comparisonBody:
-      '複数のクライアントを持つ人の1日から5つ。左が今、右が ShogunAI を挟んだあとです。',
+      '複数のクライアントを持つ人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
     cases: [
       {
         title: '案件の切り替え',
@@ -200,15 +204,16 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     finalCta: '早期アクセスを申し込む',
   },
   es: {
-    heroEyebrow: 'Trabajo con clientes impulsado por IA',
-    heroTitle: 'Todo el contexto de tus clientes, en una',
-    heroAccent: 'memoria privada',
+    heroEyebrow: 'Un día entre clientes',
+    heroTitle: 'Cada cambio de cliente te cuesta el tiempo de',
+    heroAccent: 'volver a cargarlo todo',
+    heroBody: '¿Hasta dónde llegó este proyecto? ¿Cuánto cobraste el anterior y cuántos días llevó de verdad? ¿Qué expresión no le gustó a este cliente? Hay días en que recordar lleva más tiempo que el trabajo.',
     heroCta: 'Solicitar acceso anticipado',
     proof: ['Memoria local-first', 'Elige tu IA', 'Aprobación antes de enviar'],
-    comparisonEyebrow: 'Un día entre clientes',
-    comparisonTitle: 'El tiempo que pierdes al cambiar de cliente, recuperado',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'No es un diez por ciento mejor. Es diez veces, cien veces.',
     comparisonBody:
-      'Cinco momentos de un día repartido entre varios clientes. A la izquierda, hoy. A la derecha, el mismo día con ShogunAI.',
+      'Cinco momentos de un día repartido entre varios clientes. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
     cases: [
       {
         title: 'Cambiar de cliente',
@@ -275,15 +280,16 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     finalCta: 'Solicitar acceso anticipado',
   },
   de: {
-    heroEyebrow: 'KI-gestützte Kundenarbeit',
-    heroTitle: 'Jeder Kundenkontext in einem',
-    heroAccent: 'privaten Gedächtnis',
+    heroEyebrow: 'Ein Tag zwischen Kunden',
+    heroTitle: 'Jeder Wechsel kostet dich die Zeit,',
+    heroAccent: 'alles neu zu laden',
+    heroBody: 'Wie weit war dieses Projekt? Was hat das letzte gekostet und wie lange hat es wirklich gedauert? Welche Formulierung mochte dieser Kunde nicht? An manchen Tagen dauert das Erinnern länger als die Arbeit.',
     heroCta: 'Frühzugang anfragen',
     proof: ['Local-first-Gedächtnis', 'Eigene KI wählen', 'Freigabe vor dem Senden'],
-    comparisonEyebrow: 'Ein Tag zwischen Kunden',
-    comparisonTitle: 'Die Zeit fürs Umschalten — zurück',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'Nicht zehn Prozent besser. Zehnmal, hundertmal.',
     comparisonBody:
-      'Fünf Momente aus einem Tag zwischen mehreren Kunden. Links heute, rechts derselbe Tag mit ShogunAI.',
+      'Fünf Momente aus einem Tag zwischen mehreren Kunden. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
     cases: [
       {
         title: 'Zwischen Kunden wechseln',
@@ -355,13 +361,14 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
 const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
   en: {
     ...consultantsCopyByLocale.en,
-    heroEyebrow: 'AI-powered company context',
-    heroTitle: 'Every company decision, in one',
-    heroAccent: 'private memory',
-    comparisonEyebrow: 'What a day actually looks like',
-    comparisonTitle: 'The hours you spend remembering, back',
+    heroEyebrow: 'A founder’s day',
+    heroTitle: 'You rebuild the basis for every decision',
+    heroAccent: 'from scratch each morning',
+    heroBody: 'Three businesses at once, and the decisions are spread across Slack, mail and meetings. You set today’s priorities without ever seeing what changed on Friday. What is lost is not twenty-five minutes — it is the judgement you already made.',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'Not ten percent better. Ten times, a hundred times.',
     comparisonBody:
-      'Five moments from a day spent across several businesses. On the left, today. On the right, the same day with ShogunAI in it.',
+      'Five moments from a day spent across several businesses. Open a card to swap today for the same day with ShogunAI in it.',
     cases: [
       {
         title: 'Rebuilding the morning',
@@ -427,13 +434,14 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
   },
   ja: {
     ...consultantsCopyByLocale.ja,
-    heroEyebrow: 'AIでつなぐ経営の文脈',
-    heroTitle: 'すべての経営判断を、ひとつの',
-    heroAccent: 'プライベートな記憶へ',
-    comparisonEyebrow: '1日の中で起きていること',
-    comparisonTitle: '思い出すための時間が、そのまま消える',
+    heroEyebrow: '創業者の1日',
+    heroTitle: '経営判断の材料を、',
+    heroAccent: '毎朝ゼロから組み立て直している',
+    heroBody: '3事業を並行し、決定はSlackとメールと会議に散らばる。先週の変更に気づかないまま、今日の優先順位を決めている。失われているのは25分ではなく、自分が下したはずの判断そのものだ。',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: '10%の改善ではない。10X、100Xの話だ。',
     comparisonBody:
-      '複数の事業を持つ人の1日から5つ。左が今、右が ShogunAI を挟んだあとです。',
+      '複数の事業を持つ人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
     cases: [
       {
         title: '朝、状況を組み立て直す',
@@ -498,13 +506,14 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
   },
   es: {
     ...consultantsCopyByLocale.es,
-    heroEyebrow: 'Contexto empresarial impulsado por IA',
-    heroTitle: 'Cada decisión de la empresa, en una',
-    heroAccent: 'memoria privada',
-    comparisonEyebrow: 'Cómo es un día de verdad',
-    comparisonTitle: 'Las horas que dedicas a recordar, devueltas',
+    heroEyebrow: 'El día de un fundador',
+    heroTitle: 'Cada mañana reconstruyes desde cero',
+    heroAccent: 'la base de tus decisiones',
+    heroBody: 'Tres negocios a la vez y las decisiones repartidas entre Slack, correo y reuniones. Fijas las prioridades de hoy sin haber visto lo que cambió el viernes. No se pierden veinticinco minutos: se pierde el criterio que ya aplicaste.',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'No es un diez por ciento mejor. Es diez veces, cien veces.',
     comparisonBody:
-      'Cinco momentos de un día repartido entre varios negocios. A la izquierda, hoy. A la derecha, el mismo día con ShogunAI.',
+      'Cinco momentos de un día repartido entre varios negocios. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
     cases: [
       {
         title: 'Reconstruir la mañana',
@@ -571,13 +580,14 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
   },
   de: {
     ...consultantsCopyByLocale.de,
-    heroEyebrow: 'KI-gestützter Unternehmenskontext',
-    heroTitle: 'Jede Unternehmensentscheidung in einem',
-    heroAccent: 'privaten Gedächtnis',
-    comparisonEyebrow: 'Wie ein Tag wirklich aussieht',
-    comparisonTitle: 'Die Stunden fürs Erinnern — zurück',
+    heroEyebrow: 'Der Tag einer Gründerin',
+    heroTitle: 'Jeden Morgen baust du die Grundlage',
+    heroAccent: 'jeder Entscheidung neu auf',
+    heroBody: 'Drei Geschäfte gleichzeitig, die Entscheidungen verteilt über Slack, Mail und Meetings. Du setzt die Prioritäten für heute, ohne gesehen zu haben, was sich am Freitag geändert hat. Verloren gehen nicht 25 Minuten, sondern dein eigenes Urteil.',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'Nicht zehn Prozent besser. Zehnmal, hundertmal.',
     comparisonBody:
-      'Fünf Momente aus einem Tag zwischen mehreren Geschäften. Links heute, rechts derselbe Tag mit ShogunAI.',
+      'Fünf Momente aus einem Tag zwischen mehreren Geschäften. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
     cases: [
       {
         title: 'Den Morgen neu zusammensetzen',
@@ -647,13 +657,14 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
 const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
   en: {
     ...consultantsCopyByLocale.en,
-    heroEyebrow: 'AI-powered product work',
-    heroTitle: 'Every product decision, in one',
-    heroAccent: 'private memory',
-    comparisonEyebrow: 'What happens mid-implementation',
-    comparisonTitle: 'No more loading it all back in',
+    heroEyebrow: 'A day of shipping',
+    heroTitle: 'The “why” never lands in the code —',
+    heroAccent: 'so it disappears every time',
+    heroBody: 'Every interruption takes the thread with it, and three weeks later you are digging for your own reasoning. The spec sits in Slack, in a hallway conversation and in an issue, and something falls out while you collect it.',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'Not ten percent better. Ten times, a hundred times.',
     comparisonBody:
-      'Five moments from a day spent across several codebases. On the left, today. On the right, the same day with ShogunAI in it.',
+      'Five moments from a day spent across several codebases. Open a card to swap today for the same day with ShogunAI in it.',
     cases: [
       {
         title: 'Coming back from an interruption',
@@ -720,13 +731,14 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
   },
   ja: {
     ...consultantsCopyByLocale.ja,
-    heroEyebrow: 'AIでつなぐプロダクト業務',
-    heroTitle: 'すべてのプロダクト判断を、ひとつの',
-    heroAccent: 'プライベートな記憶へ',
-    comparisonEyebrow: '実装の途中で起きていること',
-    comparisonTitle: '頭に積み直す時間が、要らなくなる',
+    heroEyebrow: '実装までの1日',
+    heroTitle: 'コードに残らない「なぜ」が、',
+    heroAccent: '毎回消えている',
+    heroBody: '中断のたびに思考が飛び、3週間後の自分が理由を掘り返す。仕様はSlackと口頭とissueに散らばり、集める途中で1つ落ちて手戻りになる。',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: '10%の改善ではない。10X、100Xの話だ。',
     comparisonBody:
-      '複数のコードベースを行き来する人の1日から5つ。左が今、右が ShogunAI を挟んだあとです。',
+      '複数のコードベースを行き来する人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
     cases: [
       {
         title: '中断からの復帰',
@@ -791,13 +803,14 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
   },
   es: {
     ...consultantsCopyByLocale.es,
-    heroEyebrow: 'Trabajo de producto impulsado por IA',
-    heroTitle: 'Cada decisión de producto, en una',
-    heroAccent: 'memoria privada',
-    comparisonEyebrow: 'Lo que pasa a mitad de la implementación',
-    comparisonTitle: 'Se acabó volver a cargarlo todo en la cabeza',
+    heroEyebrow: 'Un día de entregar código',
+    heroTitle: 'El “porqué” no queda en el código',
+    heroAccent: 'y desaparece cada vez',
+    heroBody: 'Cada interrupción se lleva el hilo y tres semanas después estás desenterrando tu propio razonamiento. La especificación vive en Slack, en una conversación de pasillo y en un issue, y algo se cae mientras la reúnes.',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'No es un diez por ciento mejor. Es diez veces, cien veces.',
     comparisonBody:
-      'Cinco momentos de un día repartido entre varias bases de código. A la izquierda, hoy. A la derecha, el mismo día con ShogunAI.',
+      'Cinco momentos de un día repartido entre varias bases de código. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
     cases: [
       {
         title: 'Volver tras una interrupción',
@@ -864,13 +877,14 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
   },
   de: {
     ...consultantsCopyByLocale.de,
-    heroEyebrow: 'KI-gestützte Produktarbeit',
-    heroTitle: 'Jede Produktentscheidung in einem',
-    heroAccent: 'privaten Gedächtnis',
-    comparisonEyebrow: 'Was mitten in der Umsetzung passiert',
-    comparisonTitle: 'Nichts mehr neu in den Kopf laden',
+    heroEyebrow: 'Ein Tag im Ausliefern',
+    heroTitle: 'Das „Warum“ landet nie im Code —',
+    heroAccent: 'und verschwindet jedes Mal',
+    heroBody: 'Jede Unterbrechung nimmt den Faden mit, und drei Wochen später gräbst du nach deiner eigenen Begründung. Die Spezifikation steckt in Slack, in einem Flurgespräch und in einem Issue — beim Einsammeln fällt etwas heraus.',
+    comparisonEyebrow: 'Before / After',
+    comparisonTitle: 'Nicht zehn Prozent besser. Zehnmal, hundertmal.',
     comparisonBody:
-      'Fünf Momente aus einem Tag zwischen mehreren Codebasen. Links heute, rechts derselbe Tag mit ShogunAI.',
+      'Fünf Momente aus einem Tag zwischen mehreren Codebasen. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
     cases: [
       {
         title: 'Rückkehr nach einer Unterbrechung',
@@ -1029,11 +1043,35 @@ function FollowUpVisual({ copy }: { copy: VisualCopy }) {
   );
 }
 
-const caseUi: Record<Locale, { before: string; after: string; lost: string }> = {
-  en: { before: 'Today', after: 'With ShogunAI', lost: 'What it costs:' },
-  ja: { before: 'いま', after: 'ShogunAI のあと', lost: '失われるもの:' },
-  es: { before: 'Hoy', after: 'Con ShogunAI', lost: 'Lo que cuesta:' },
-  de: { before: 'Heute', after: 'Mit ShogunAI', lost: 'Was es kostet:' },
+const caseUi: Record<Locale, CaseLabels> = {
+  en: {
+    before: 'Today',
+    after: 'With ShogunAI',
+    lost: 'What it costs:',
+    seeAfter: 'See the same day with ShogunAI',
+    seeBefore: 'Back to today',
+  },
+  ja: {
+    before: 'いま',
+    after: 'ShogunAI のあと',
+    lost: '失われるもの:',
+    seeAfter: 'ShogunAI のあとを見る',
+    seeBefore: 'いまに戻る',
+  },
+  es: {
+    before: 'Hoy',
+    after: 'Con ShogunAI',
+    lost: 'Lo que cuesta:',
+    seeAfter: 'Ver el mismo día con ShogunAI',
+    seeBefore: 'Volver a hoy',
+  },
+  de: {
+    before: 'Heute',
+    after: 'Mit ShogunAI',
+    lost: 'Was es kostet:',
+    seeAfter: 'Denselben Tag mit ShogunAI ansehen',
+    seeBefore: 'Zurück zu heute',
+  },
 };
 
 export function isProductLedUseCase(slug: string): slug is UseCaseSlug {
@@ -1064,8 +1102,8 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
                 {copy.heroAccent}
               </span>
             </h1>
-            <p className="text-muted mt-7 max-w-[640px] text-[clamp(17px,1.55vw,21px)] leading-[1.6]">
-              {page.description}
+            <p className="text-muted mt-7 max-w-[680px] text-[clamp(17px,1.55vw,21px)] leading-[1.65]">
+              {copy.heroBody}
             </p>
             <Link
               href={homeCta}
@@ -1097,38 +1135,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
               {copy.comparisonBody}
             </p>
           </div>
-          {/* One card per scene: what the day costs today on the left, what it costs with the memory on the right. */}
-          <div className="mt-14 grid gap-6">
-            {copy.cases.map((item) => (
-              <article
-                key={item.title}
-                className="theme-light-panel border-border bg-surface overflow-hidden rounded-[26px] border"
-              >
-                <h3 className="border-border text-ink border-b px-[clamp(22px,3.4vw,40px)] py-6 text-[clamp(20px,2vw,27px)] font-semibold tracking-[-0.035em]">
-                  {item.title}
-                </h3>
-                <div className="grid lg:grid-cols-2">
-                  <div className="lg:border-border px-[clamp(22px,3.4vw,40px)] py-[clamp(24px,3.2vw,38px)] lg:border-r">
-                    <p className="text-muted flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
-                      <X className="size-4 text-[#ef4d48]" strokeWidth={2.6} aria-hidden="true" />
-                      {ui.before}
-                    </p>
-                    <p className="text-muted mt-5 text-[clamp(15px,1.2vw,17px)] leading-[1.7]">{item.before}</p>
-                    <p className="border-border text-muted mt-6 border-t pt-5 text-[14px] leading-[1.6]">
-                      <span className="font-semibold text-[#ef4d48]">{ui.lost}</span> {item.lost}
-                    </p>
-                  </div>
-                  <div className="theme-soft-section bg-[#f7f4ff] px-[clamp(22px,3.4vw,40px)] py-[clamp(24px,3.2vw,38px)]">
-                    <p className="text-ink flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
-                      <Check className="size-4 text-[#25a65a]" strokeWidth={2.8} aria-hidden="true" />
-                      {ui.after}
-                    </p>
-                    <p className="text-ink mt-5 text-[clamp(15px,1.2vw,17px)] leading-[1.7] font-medium">{item.after}</p>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
+          <CaseCards cases={copy.cases} labels={ui} />
           <div className="mt-12 flex justify-center">
             <Link
               href={homeCta}
