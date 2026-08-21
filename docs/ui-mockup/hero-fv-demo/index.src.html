@@ -116,35 +116,26 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 /* ── mail scene ── */
 .scene{opacity:0;pointer-events:none;transition:opacity 220ms ease}
 .scene.live{opacity:1;pointer-events:auto}
-.mailwin{position:absolute;left:50%;top:170px;transform:translateX(-50%);width:860px;
-  border-radius:12px;overflow:hidden;background:#FFFFFF;
-  box-shadow:0 30px 80px rgba(0,0,0,.4),0 0 0 1px rgba(0,0,0,.12);color:#1B1D22}
+
 .mailbar{height:44px;background:#F2F3F6;display:flex;align-items:center;padding:0 16px;gap:8px;
   border-bottom:1px solid rgba(0,0,0,.08)}
 .tl{width:12px;height:12px;border-radius:50%}
 .mailtitle{flex:1;text-align:center;font-size:13px;font-weight:600;color:rgba(27,29,34,.8)}
-.mailmeta{padding:12px 22px 0;font-size:12.5px;color:#5C616A;display:flex;flex-direction:column;gap:8px}
-.mailmeta i{font-style:normal;color:#1B1D22}
-.mailmeta .mrow{border-bottom:1px solid rgba(0,0,0,.07);padding-bottom:8px}
-.mailbody{padding:16px 22px 22px;font-size:14px;line-height:1.65;min-height:190px;white-space:pre-wrap}
-.mailbody .tcaret{display:inline-block;width:1.5px;height:15px;background:#2F6FED;vertical-align:-2px;animation:blink 1s steps(1) infinite}
 
-.keycap{position:absolute;left:1208px;top:380px;width:92px;height:92px;border-radius:20px;
-  background:linear-gradient(180deg,#22252D,#0E1015);border:1px solid rgba(255,255,255,.18);
-  box-shadow:0 14px 34px rgba(0,0,0,.55),inset 0 1.5px 0 rgba(255,255,255,.22);
-  display:grid;place-items:center;color:#EEF1F5;transform:scale(.9);opacity:0;
-  transition:all 200ms ease}
+
+
+
+
+
+
 .keycap.in{opacity:1;transform:scale(1)}
 .keycap.press{transform:scale(.94) translateY(2px);
   box-shadow:0 6px 18px rgba(0,0,0,.5),0 0 26px rgba(110,168,254,.55),inset 0 1.5px 0 rgba(255,255,255,.22)}
 .keycap .sym{font-size:30px;line-height:1}
 .keycap .nm{font-size:10px;color:#8B95A3;margin-top:3px;letter-spacing:.5px}
-.draftpill{position:absolute;left:22px;top:148px;display:inline-flex;align-items:center;gap:7px;
-  padding:6px 11px;border-radius:999px;background:#0C0F15;color:#EEF1F5;font-size:11px;
-  box-shadow:0 8px 22px rgba(0,0,0,.35);opacity:0;transform:translateY(4px);transition:all 180ms ease}
-.draftpill.in{opacity:1;transform:none}
-.confirmbar{position:absolute;right:18px;bottom:14px;display:flex;align-items:center;gap:8px;
-  opacity:0;transform:translateY(6px);transition:all 220ms ease}
+
+
+
 .confirmbar.in{opacity:1;transform:none}
 .csend{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:999px;
   font:600 12px var(--ui);color:#06101C;background:linear-gradient(90deg,#6EA8FE,#8F7DFB);
@@ -237,6 +228,69 @@ body.clean .rail,body.clean .hint{opacity:0;pointer-events:none}
 body.clean .esc{opacity:1}
 
 
+
+/* ── mail thread ── */
+.mailwin{position:absolute;left:50%;top:132px;transform:translateX(-50%);width:920px;
+  border-radius:12px;overflow:hidden;background:#FFFFFF;
+  box-shadow:0 30px 80px rgba(0,0,0,.42),0 0 0 1px rgba(0,0,0,.12);color:#1B1D22}
+.msg{padding:16px 24px 18px}
+.msghead{display:flex;align-items:center;gap:11px;padding-bottom:12px;border-bottom:1px solid rgba(0,0,0,.08)}
+.av{width:34px;height:34px;border-radius:50%;background:#3B6FE0;color:#fff;
+  display:grid;place-items:center;font:600 12px var(--ui);flex:none}
+.who{display:flex;flex-direction:column;gap:1px;flex:1}
+.who b{font-size:13.5px;font-weight:600}
+.who span{font-size:11.5px;color:#6B7280}
+.when{font-size:11px;color:#6B7280}
+.msgbody{padding-top:13px;font-size:13.5px;line-height:1.62;white-space:pre-line;color:#2A2D34}
+.msgbody b{font-weight:600;color:#1B1D22;background:rgba(110,168,254,.16);
+  padding:1px 3px;border-radius:3px}
+.replyblock{margin:0 18px 16px;border-radius:12px;border:1.5px solid rgba(110,168,254,.5);
+  background:rgba(110,168,254,.05);overflow:hidden;
+  max-height:0;opacity:0;transition:max-height 420ms cubic-bezier(.16,1,.3,1),opacity 260ms ease}
+.replyblock.in{max-height:320px;opacity:1}
+.replyhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:9px 13px;background:rgba(110,168,254,.10);border-bottom:1px solid rgba(110,168,254,.22)}
+.rlabel{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#1B3A6B}
+.rgrounds{display:flex;gap:6px;opacity:0;transition:opacity 300ms ease}
+.rgrounds.in{opacity:1}
+.ground{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:999px;
+  background:#fff;border:1px solid rgba(0,0,0,.10);font-size:9.5px;color:#5C616A}
+.ground i{width:5px;height:5px;border-radius:50%;display:block}
+.replybody{padding:13px 15px;font-size:13.5px;line-height:1.62;white-space:pre-line;
+  min-height:112px;color:#1B1D22}
+.replybody .tcaret{display:inline-block;width:1.5px;height:15px;background:#2F6FED;
+  vertical-align:-2px;animation:blink 1s steps(1) infinite}
+.confirmbar{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 13px;border-top:1px solid rgba(110,168,254,.22);background:rgba(255,255,255,.7);
+  opacity:0;transform:translateY(4px);transition:all 240ms ease}
+.confirmbar.in{opacity:1;transform:none}
+.cnote{display:flex;align-items:center;gap:8px;font-size:10.5px;color:#5C616A}
+.cnote .tag{font-size:8.5px}
+.keycap{position:absolute;left:1250px;top:400px;width:92px;height:92px;border-radius:20px;
+  background:linear-gradient(180deg,#22252D,#0E1015);border:1px solid rgba(255,255,255,.18);
+  box-shadow:0 14px 34px rgba(0,0,0,.55),inset 0 1.5px 0 rgba(255,255,255,.22);
+  display:grid;place-items:center;color:#EEF1F5;transform:scale(.9);opacity:0;
+  transition:all 200ms ease;z-index:4}
+
+
+/* ── meeting offer ── */
+.offercard{position:absolute;right:40px;top:60px;display:flex;align-items:center;gap:13px;
+  padding:14px 16px;border-radius:16px;background:rgba(6,6,8,.94);
+  border:1px solid rgba(255,255,255,.15);box-shadow:0 18px 44px rgba(0,0,0,.5);
+  opacity:0;transform:translateY(-8px);transition:all 300ms cubic-bezier(.16,1,.3,1)}
+.offercard.in{opacity:1;transform:none}
+.odots{display:flex;gap:4px}
+.odots i{width:7px;height:7px;border-radius:50%;background:#6EA8FE;display:block}
+.odots i:nth-child(2){opacity:.6}.odots i:nth-child(3){opacity:.3}
+.ocopy{display:flex;flex-direction:column;gap:3px}
+.ocopy b{font:600 13px var(--ui);color:#fff}
+.ocopy span{font-size:11px;color:#8B95A3}
+.oacts{display:flex;gap:8px;margin-left:8px}
+.oskip{padding:7px 12px;border-radius:999px;background:rgba(255,255,255,.08);
+  font:400 11px var(--ui);color:#EEF1F5}
+.ogo{padding:7px 14px;border-radius:999px;background:#fff;font:600 11px var(--ui);color:#0B0D11}
+.meetwrap{transition:opacity 300ms ease}
+
 /* ── acquire (L1): the inputs lighting up ── */
 .acq{position:absolute;top:96px;left:50%;transform:translateX(-50%);
   display:flex;flex-direction:column;align-items:center;gap:10px}
@@ -311,25 +365,48 @@ body.capture .stage{border-radius:0;box-shadow:none}
         <span class="sp">Wed 20 Aug&nbsp;&nbsp;9:41</span>
       </div>
 
-      <!-- mail scene -->
+      <!-- mail scene: a real thread — what came in, then what SHOGUN writes back -->
       <div class="scene" id="scMail">
-        <div class="mailwin">
+        <div class="mailwin" id="mailwin">
           <div class="mailbar">
             <span class="tl" style="background:#FF5F57"></span><span class="tl" style="background:#FEBC2E"></span><span class="tl" style="background:#28C840"></span>
-            <span class="mailtitle">Re: Vendor renewal &mdash; final numbers</span>
+            <span class="mailtitle">Vendor renewal &mdash; final numbers</span>
           </div>
-          <div class="mailmeta">
-            <span class="mrow">To: <i>Aiko Tanaka</i></span>
-            <span class="mrow">Subject: <i>Re: Vendor renewal &mdash; final numbers</i></span>
+
+          <div class="msg">
+            <div class="msghead">
+              <span class="av">AT</span>
+              <span class="who"><b>Aiko Tanaka</b><span>to me &middot; yesterday 18:12</span></span>
+              <span class="when">Inbox</span>
+            </div>
+            <div class="msgbody">Hi,
+
+We landed at <b>12k for the year</b> &mdash; down from the 14.4k they opened with, and it holds the same seat count. Procurement needs your sign-off before they can raise the PO, and their cut-off is <b>Friday 17:00</b>.
+
+One more thing: Daniel moved the launch to <b>the 14th</b>, so the deck we showed last week is out of date. Can you send the revised version? I&rsquo;ll keep the vendor thread from here.
+
+Thanks,
+Aiko</div>
           </div>
-          <div class="mailbody"><span id="mailText"></span><span class="tcaret" id="mailCaret"></span></div>
-          <div class="draftpill" id="draftPill"><span id="kab2"></span>Drafting&hellip;</div>
-          <div class="confirmbar" id="confirmBar">
-            <b class="tag l3" style="font-size:9px">L3</b>
-            <button class="csend" id="csend">Confirm &amp; send</button>
+
+          <div class="replyblock" id="replyblock">
+            <div class="replyhead">
+              <span class="rlabel"><span id="kab2"></span><b id="replyLabel">Drafting your reply&hellip;</b></span>
+              <span class="rgrounds" id="rgrounds">
+                <span class="ground"><i style="background:#4EA1FF"></i>Mail &middot; this thread</span>
+                <span class="ground"><i style="background:#FF6B6B"></i>Calendar &middot; the 14th</span>
+                <span class="ground"><i style="background:#30D158"></i>Weekly sync &middot; Tue</span>
+              </span>
+            </div>
+            <div class="replybody"><span id="mailText"></span><span class="tcaret" id="mailCaret"></span></div>
+            <div class="confirmbar" id="confirmBar">
+              <span class="cnote"><b class="tag l3">L3</b>Leaves this Mac &mdash; nothing sends without you</span>
+              <button class="csend" id="csend">Confirm &amp; send</button>
+            </div>
           </div>
-          <div class="toast" id="mailToast"><i class="dot" style="background:#6EA8FE"></i>Sent &middot; logged in Traceability</div>
-          </div>
+
+          <div class="toast" id="mailToast"><i class="dot" style="background:#6EA8FE"></i>Sent &middot; direct &middot; logged in Traceability</div>
+        </div>
         <div class="keycap" id="keycap"><div style="text-align:center"><div class="sym">&#8997;</div><div class="nm">option</div></div></div>
       </div>
 
@@ -343,7 +420,12 @@ body.capture .stage{border-radius:0;box-shadow:none}
 
       <!-- meeting scene -->
       <div class="scene" id="scMeet">
-        <div class="meetwrap">
+        <div class="offercard" id="offercard">
+          <span class="odots"><i></i><i></i><i></i></span>
+          <span class="ocopy"><b>Meeting detected</b><span>Weekly sync &middot; Google Meet</span></span>
+          <span class="oacts"><span class="oskip">Not now</span><span class="ogo">Take Notes</span></span>
+        </div>
+        <div class="meetwrap" id="meetwrap">
           <div class="caps">
             <div class="chips">
               <span class="mchip" style="background:rgba(255,255,255,.14)">One-way Translation</span>
@@ -422,6 +504,17 @@ body.capture .stage{border-radius:0;box-shadow:none}
             <div class="stagger" style="--d:190ms;font-size:10px;color:var(--faint);line-height:1.5">
               Every row carries the evidence it came from and how sure ShogunAI is. Low confidence is never mixed in as fact.
             </div>
+          </div>
+        </div>
+
+        <div class="panel" id="pSearch">
+          <div class="pglass"></div>
+          <div class="pbody">
+            <div class="sbox"><b>/</b><span id="q"></span><span class="caret"></span></div>
+            <div class="srow" id="r1"><span>Aiko: &ldquo;we landed at 12k for the year&rdquo;</span><span class="m">Mail &middot; yesterday 18:12</span></div>
+            <div class="srow" id="r2"><span>Renewal at 12k &mdash; agreed in Weekly sync</span><span class="m">Meeting &middot; Tue 11:04</span></div>
+            <div class="srow" id="r3"><span>PO cannot be raised before sign-off</span><span class="m">Slack &middot; #procurement</span></div>
+            <div style="font-size:10px;color:var(--faint);margin-top:10px">One question, three surfaces &mdash; answered from this Mac in under 500 ms.</div>
           </div>
         </div>
 
@@ -587,14 +680,18 @@ function countTo(el,n,ms,suffix){
 }
 function resetStage(){
   clearT();
-  ['pBrief','pWorld','pEve','pLearn'].forEach(id=>$(id).classList.remove('open'));
+  ['pBrief','pWorld','pSearch','pEve','pLearn'].forEach(id=>$(id).classList.remove('open'));
   ['scMail','scMeet','scEnd'].forEach(id=>$(id).classList.remove('live'));
   glow.classList.remove('on');
   chin.classList.remove('hide');
   $('night').classList.remove('on');
   $('dreamline').classList.remove('in');$('dreambar').style.width='0';
-  $('keycap').className='keycap';$('draftPill').className='draftpill';
+  $('keycap').className='keycap';
   $('confirmBar').className='confirmbar';$('mailToast').className='toast';
+  $('replyblock').className='replyblock';$('rgrounds').className='rgrounds';
+  $('replyLabel').textContent='Drafting your reply\u2026';
+  $('offercard').classList.remove('in');$('meetwrap').style.opacity='1';
+  $('q').textContent='';['r1','r2','r3'].forEach(id=>$(id).classList.remove('in'));
   $('csend').className='csend';$('csend').innerHTML='Confirm &amp; send';
   $('mailText').textContent='';$('mailCaret').style.display='inline-block';
   $('capEn').classList.remove('in');$('capJa').textContent='';
@@ -613,47 +710,78 @@ $('acqrow').innerHTML=SOURCES.map(x=>
   '<span class="inchip"><i style="background:'+x[1]+'"></i>'+x[0]+' <b>'+x[2]+'</b></span>').join('');
 const inchips=[...document.querySelectorAll('.inchip')];
 
+const INBOUND_HL=['12k for the year','Friday 17:00','the 14th'];
+const REPLY='Hi Aiko,\n\nApproved at 12k — good work getting them off 14.4k without losing seats. Tell procurement they have my sign-off; I\u2019ll confirm in writing before Friday 17:00.\n\nRevised deck follows as soon as the 14th is locked. Thanks for taking the vendor thread.';
+
 const SCENES = [
- {name:'Acquire',dur:2200,run(){
+ {name:'Acquire',dur:2600,run(){
    chinBody.innerHTML=IDLE_CHIN;
-   inchips.forEach((c,i)=>after(180+i*180,()=>c.classList.add('in')));
-   after(950,()=>{$('acqline').classList.add('in');countTo($('acqn'),1204,900)});
+   inchips.forEach((c,i)=>after(200+i*220,()=>c.classList.add('in')));
+   after(1150,()=>{$('acqline').classList.add('in');countTo($('acqn'),1204,1100)});
  }},
- {name:'World model',dur:2600,run(){
+ {name:'World model',dur:3100,run(){
    chinBody.innerHTML=IDLE_CHIN;chin.classList.add('hide');
    $('pWorld').classList.add('open');
-   after(200,()=>{countTo($('w1'),24,700);countTo($('w2'),6,700);
-     countTo($('w3'),9,700);countTo($('w4'),5,700)});
+   after(220,()=>{countTo($('w1'),24,900);countTo($('w2'),6,900);
+     countTo($('w3'),9,900);countTo($('w4'),5,900)});
  }},
- {name:'Act',dur:3800,run(){
+ {name:'Recall',dur:2400,run(){
+   chin.classList.add('hide');
+   $('pSearch').classList.add('open');
+   after(180,()=>typeInto($('q'),'vendor renewal',520));
+   after(880,()=>$('r1').classList.add('in'));
+   after(1030,()=>$('r2').classList.add('in'));
+   after(1180,()=>$('r3').classList.add('in'));
+ }},
+ {name:'Read',dur:3000,run(){
    chinBody.innerHTML=IDLE_CHIN;
    $('scMail').classList.add('live');
-   after(300,()=>$('keycap').classList.add('in'));
-   after(580,()=>$('keycap').classList.add('press'));
-   after(820,()=>{$('keycap').classList.remove('press');$('draftPill').classList.add('in')});
-   after(900,()=>typeInto($('mailText'),MAILTXT,1150));
-   after(2150,()=>{$('draftPill').classList.remove('in');$('confirmBar').classList.add('in')});
-   after(2850,()=>{const b=$('csend');b.classList.add('done');b.innerHTML='&#10003; Sent';
-     $('mailToast').classList.add('in');$('mailCaret').style.display='none'});
  }},
- {name:'Overnight',dur:3400,run(){
+ {name:'Draft (\u2325)',dur:4200,run(){
+   chinBody.innerHTML=IDLE_CHIN;
+   $('scMail').classList.add('live');
+   after(250,()=>$('keycap').classList.add('in'));
+   after(560,()=>$('keycap').classList.add('press'));
+   after(820,()=>{$('keycap').classList.remove('press');$('replyblock').classList.add('in')});
+   after(1150,()=>$('rgrounds').classList.add('in'));
+   after(1250,()=>typeInto($('mailText'),REPLY,2600));
+ }},
+ {name:'Approve',dur:2800,run(){
+   chinBody.innerHTML=IDLE_CHIN;
+   $('scMail').classList.add('live');$('replyblock').classList.add('in');
+   $('rgrounds').classList.add('in');$('mailText').textContent=REPLY;
+   $('mailCaret').style.display='none';$('replyLabel').textContent='Draft ready';
+   after(200,()=>$('confirmBar').classList.add('in'));
+   after(1350,()=>{const c=$('csend');c.classList.add('done');c.innerHTML='&#10003; Sent';
+     $('mailToast').classList.add('in');$('replyLabel').textContent='Sent';});
+ }},
+ {name:'Meeting',dur:4000,run(){
+   chinBody.innerHTML=IDLE_CHIN;
+   $('scMeet').classList.add('live');
+   $('meetwrap').style.opacity='0';
+   after(200,()=>$('offercard').classList.add('in'));
+   after(1300,()=>{$('offercard').classList.remove('in');$('meetwrap').style.opacity='1'});
+   after(1750,()=>$('capEn').classList.add('in'));
+   after(2150,()=>typeInto($('capJa'),'12kで着地したので、金曜までに承認をお願いします。',1100));
+ }},
+ {name:'Overnight',dur:4400,run(){
    chin.classList.add('hide');
    $('pEve').classList.add('open');
-   after(200,()=>{countTo($('t1'),3,500);countTo($('t2'),2,500);
-     after(500,()=>$('t3').textContent='1/2')});
-   after(1250,()=>{$('pEve').classList.remove('open');$('night').classList.add('on')});
-   after(1650,()=>{$('dreamline').classList.add('in');
+   after(220,()=>{countTo($('t1'),3,600);countTo($('t2'),2,600);
+     after(600,()=>$('t3').textContent='1/2')});
+   after(1700,()=>{$('pEve').classList.remove('open');$('night').classList.add('on')});
+   after(2150,()=>{$('dreamline').classList.add('in');
      after(60,()=>$('dreambar').style.width='100%')});
-   after(2850,()=>{$('dreamline').classList.remove('in');$('night').classList.remove('on');
+   after(3800,()=>{$('dreamline').classList.remove('in');$('night').classList.remove('on');
      glow.classList.add('on');chinBody.innerHTML=ARRIVE_CHIN;chin.classList.remove('hide')});
-   after(3150,()=>{glow.classList.remove('on');chin.classList.add('hide');
+   after(4150,()=>{glow.classList.remove('on');chin.classList.add('hide');
      $('pBrief').classList.add('open');countTo($('ev'),1204,700)});
  }},
- {name:'Learn',dur:2400,run(){
+ {name:'Learn',dur:2800,run(){
    chin.classList.add('hide');
    $('pLearn').classList.add('open');
  }},
- {name:'Mark',dur:1300,run(){
+ {name:'Mark',dur:1500,run(){
    chinBody.innerHTML=ARRIVE_CHIN;chin.classList.add('hide');
    $('scEnd').classList.add('live');
  }}
