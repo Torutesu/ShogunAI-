@@ -26,6 +26,8 @@ type VisualCopy = {
   review: string;
   approved: string;
 };
+/** One before/after scene: what the day costs today, and what it costs with the memory in place. */
+type Case = { title: string; before: string; lost: string; after: string };
 type UseCaseCopy = {
   heroEyebrow: string;
   heroTitle: string;
@@ -35,10 +37,7 @@ type UseCaseCopy = {
   comparisonEyebrow: string;
   comparisonTitle: string;
   comparisonBody: string;
-  oldTitle: string;
-  newTitle: string;
-  oldItems: readonly [string, string, string, string];
-  newItems: readonly [string, string, string, string];
+  cases: readonly [Case, Case, Case, Case, Case];
   featuresEyebrow: string;
   featuresTitle: string;
   featuresBody: string;
@@ -57,23 +56,51 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'private memory',
     heroCta: 'Get early access',
     proof: ['Local-first memory', 'Bring your own AI', 'Approval before sending'],
-    comparisonEyebrow: 'The ShogunAI way',
-    comparisonTitle: 'Client work is fragmented. Let’s reconnect it.',
+    comparisonEyebrow: 'A day across clients',
+    comparisonTitle: 'The time you spend switching, gone',
     comparisonBody:
-      'Move from scattered context and manual reconstruction to a private memory that is ready before the work begins.',
-    oldTitle: 'The old way',
-    newTitle: 'The ShogunAI way',
-    oldItems: [
-      'Search across email, documents, meetings, and notes',
-      'Rebuild the client story before every conversation',
-      'Carry commitments and follow-ups in your head',
-      'Pay the attention cost every time you switch clients',
-    ],
-    newItems: [
-      'Recall client context from your private work memory',
-      'Prepare a briefing from context you already have',
-      'Draft follow-ups and review them before they leave',
-      'Keep memory local by default and control what is shared',
+      'Five moments from a day spent across several clients. On the left, today. On the right, the same day with ShogunAI in it.',
+    cases: [
+      {
+        title: 'Switching between clients',
+        before:
+          'You are mid-design for client A when B sends something urgent. Before you can start, you spend eight minutes reconstructing what you last shipped to B and what you are waiting on. You clear B, return to A, and now you have lost your own thread there.',
+        lost: 'Eight minutes per switch, and the thread you were holding in A',
+        after:
+          'The state of each engagement is held for you: switch to B and it opens with “B — shipped the revised deck last week, waiting on their review.” Go back to A and the work picks up where you left it. The remembering step is not part of the day.',
+      },
+      {
+        title: 'What to quote',
+        before:
+          'A new enquiry comes in. You have built something close before, but you cannot recall what you charged or how many days it actually took, so you spend fifteen minutes digging through old threads and quote on instinct. Halfway in, the estimate breaks.',
+        lost: 'Fifteen minutes of digging, and a price based on what you actually did last time',
+        after:
+          'Past engagements are remembered with their numbers: “Similar landing page — quoted ¥X, actually took Y days, two over estimate.” Quoting from memory-by-instinct stops being the method.',
+      },
+      {
+        title: 'What this client cannot stand',
+        before:
+          'You start a proposal for client C. Something about a casual tone went badly once, but you are not sure, so you spend ten minutes reading back through old messages to check.',
+        lost: 'Ten minutes of checking, and the landmine you were about to step on again',
+        after:
+          'As you start writing: “C prefers a formal register — flagged your casual draft two months ago.” No search, and no second visit to the same landmine.',
+      },
+      {
+        title: 'Terms nobody can find',
+        before:
+          '“We can still get another round of revisions, right?” You agreed to two at signing, but you cannot say where that was agreed, cannot produce it, and absorb the work for free.',
+        lost: 'The terms you did agree, and the hours you gave away',
+        after:
+          'The agreement is remembered where it was made: “Two rounds of revisions, agreed in the signing email — here it is.” No excavation, and no folding because you cannot prove it.',
+      },
+      {
+        title: 'Follow-ups that fall through',
+        before:
+          'Friday, 5pm. Five prospects were messaged this week. Ten minutes go into working out who replied, who did not, and who is due a nudge. One good moment passes anyway.',
+        lost: 'Ten minutes of reconstruction, and the one you let go cold',
+        after:
+          'Sent messages and elapsed days are already tracked: “Three unanswered — one is due a follow-up today.” Nothing to reconstruct, nothing to lose.',
+      },
     ],
     featuresEyebrow: 'AI for the complete client workflow',
     featuresTitle: 'From scattered signals to client-ready work',
@@ -104,22 +131,51 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'プライベートな記憶へ',
     heroCta: '早期アクセスを申し込む',
     proof: ['ローカルファースト', '利用するAIを選択', '送信前に承認'],
-    comparisonEyebrow: 'ShogunAIの進め方',
-    comparisonTitle: '分散した顧客業務を、ひとつの流れへ。',
-    comparisonBody: '散らばった文脈を毎回組み立て直す働き方から、仕事を始める前に必要な経緯がそろう働き方へ変えます。',
-    oldTitle: 'これまでの顧客業務',
-    newTitle: 'ShogunAIなら',
-    oldItems: [
-      'メール、文書、会議、メモを横断して探す',
-      '会話のたびに顧客の経緯を組み立て直す',
-      '約束事項とフォローを頭の中だけで抱える',
-      '顧客を切り替えるたびに集中力を使う',
-    ],
-    newItems: [
-      'プライベートな仕事の記憶から顧客文脈を呼び出す',
-      'すでに持っている文脈から会議ブリーフを準備する',
-      'フォローを下書きし、外部へ出る前に確認する',
-      '記憶を既定でローカルに保ち、共有範囲を管理する',
+    comparisonEyebrow: '案件をまたぐ1日',
+    comparisonTitle: '切り替えのたびに払っていた時間が、なくなる',
+    comparisonBody:
+      '複数のクライアントを持つ人の1日から5つ。左が今、右が ShogunAI を挟んだあとです。',
+    cases: [
+      {
+        title: '案件の切り替え',
+        before:
+          'A社のデザイン作業中にB社から急ぎの連絡。頭を切り替えるのに「B社は前回何を納品して、今は何待ちだったか」を8分思い出す。Bを片付けてAに戻ると、今度は自分がAで何をしていたか忘れている。',
+        lost: '切り替えのたびに溶ける8分と、戻ったときの作業の流れ',
+        after:
+          '案件ごとの作業状態を保持しているので、B社に切り替えた瞬間に「B社: 先週◯◯を納品、現在は先方の確認待ち」が出る。A社に戻れば「さっきここまで作業していました」と続きが戻る。思い出す作業そのものが発生しない。',
+      },
+      {
+        title: '見積もりの根拠',
+        before:
+          '新規の問い合わせに見積もりを返す。過去に似たLP制作をやったはずだが、いくらで受けて実際何日かかったか思い出せず、過去のやりとりを探して15分。結局は勘で出し、後半で工数が破綻する。',
+        lost: '探し回った15分と、実績に基づいた値付け',
+        after:
+          '過去案件の金額と実際の所要時間を覚えているので、「類似のLP制作: 前回◯円・実働△日（見積もりより2日超過）」と実績で出る。勘で見積もる作業が消える。',
+      },
+      {
+        title: 'クライアントの好みと地雷',
+        before:
+          'C社への提案文を書く。前にカジュアルすぎる文面で指摘された記憶はあるが確証がなく、過去のやりとりを遡って確認して10分。',
+        lost: '確認の10分と、もう一度踏みかけた地雷',
+        after:
+          '書き始めた時点で「C社: フォーマルな文面を好む（2ヶ月前にカジュアルな文面で指摘あり）」が先に出る。探す作業も、地雷の再訪も起きない。',
+      },
+      {
+        title: '契約条件の食い違い',
+        before:
+          'クライアントから「修正、まだできますよね?」。契約時に「修正2回まで」と決めたはずだが、どこで合意したか曖昧で、証拠を探せずに無償で対応する。',
+        lost: '合意したはずの条件と、無償で出した工数',
+        after:
+          '契約時のやりとりを覚えているので、「契約時のメールで修正2回までと合意済み」と該当箇所を出せる。掘り返す作業も、あやふやなまま折れる事態も起きない。',
+      },
+      {
+        title: 'フォローの取りこぼし',
+        before:
+          '金曜17時。今週DMした見込み客が5人。誰が返信済みで誰が未返信かをリストで見返して10分。1件、フォローの好機を逃す。',
+        lost: '見返した10分と、逃した1件',
+        after:
+          '送信履歴と経過日数を覚えているので、「未返信3件・うち1件はそろそろフォロー時」と届く。見返す作業も、逃す事態も起きない。',
+      },
     ],
     featuresEyebrow: '顧客業務全体を支えるAI',
     featuresTitle: '散らばった兆しを、顧客に届ける仕事へ',
@@ -149,23 +205,51 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'memoria privada',
     heroCta: 'Solicitar acceso anticipado',
     proof: ['Memoria local-first', 'Elige tu IA', 'Aprobación antes de enviar'],
-    comparisonEyebrow: 'La forma ShogunAI',
-    comparisonTitle: 'El trabajo con clientes está fragmentado. Volvamos a conectarlo.',
+    comparisonEyebrow: 'Un día entre clientes',
+    comparisonTitle: 'El tiempo que pierdes al cambiar de cliente, recuperado',
     comparisonBody:
-      'Pasa de reconstruir contexto disperso a tener una memoria privada lista antes de empezar el trabajo.',
-    oldTitle: 'La forma anterior',
-    newTitle: 'La forma ShogunAI',
-    oldItems: [
-      'Buscar entre correo, documentos, reuniones y notas',
-      'Reconstruir la historia del cliente antes de cada conversación',
-      'Guardar compromisos y seguimientos solo en tu cabeza',
-      'Pagar el coste de atención cada vez que cambias de cliente',
-    ],
-    newItems: [
-      'Recuperar contexto desde tu memoria privada de trabajo',
-      'Preparar un briefing con el contexto que ya tienes',
-      'Redactar seguimientos y revisarlos antes de enviarlos',
-      'Mantener la memoria en local y controlar lo que se comparte',
+      'Cinco momentos de un día repartido entre varios clientes. A la izquierda, hoy. A la derecha, el mismo día con ShogunAI.',
+    cases: [
+      {
+        title: 'Cambiar de cliente',
+        before:
+          'Estás con el diseño del cliente A cuando B manda algo urgente. Antes de empezar, pasas ocho minutos reconstruyendo qué entregaste a B y qué estás esperando. Cierras B, vuelves a A y ahora has perdido tu propio hilo allí.',
+        lost: 'Ocho minutos por cambio y el hilo que llevabas en A',
+        after:
+          'El estado de cada encargo queda guardado: al cambiar a B aparece «B: entregada la propuesta la semana pasada, pendiente de su revisión». Al volver a A, el trabajo sigue donde lo dejaste. Recordar deja de ser parte del día.',
+      },
+      {
+        title: 'En qué basar el presupuesto',
+        before:
+          'Llega una consulta nueva. Hiciste algo parecido, pero no recuerdas cuánto cobraste ni cuántos días te llevó: quince minutos entre conversaciones antiguas y un presupuesto a ojo que revienta a mitad del proyecto.',
+        lost: 'Quince minutos de búsqueda y un precio basado en lo que de verdad costó',
+        after:
+          'Los encargos anteriores se recuerdan con sus cifras: «Landing similar: cobraste X, tardaste Y días, dos más de lo previsto». Presupuestar a ojo deja de ser el método.',
+      },
+      {
+        title: 'Lo que este cliente no tolera',
+        before:
+          'Empiezas una propuesta para el cliente C. Recuerdas vagamente que un tono informal salió mal, no estás seguro y dedicas diez minutos a releer mensajes antiguos.',
+        lost: 'Diez minutos de comprobación y la mina que ibas a pisar otra vez',
+        after:
+          'Al empezar a escribir aparece: «C prefiere un tono formal: señaló tu borrador informal hace dos meses». Ni búsqueda ni segunda visita a la misma mina.',
+      },
+      {
+        title: 'Condiciones que nadie encuentra',
+        before:
+          '«Todavía entra otra ronda de cambios, ¿verdad?» Acordasteis dos al firmar, pero no sabes dónde quedó por escrito, no puedes mostrarlo y asumes el trabajo gratis.',
+        lost: 'Las condiciones que sí acordaste y las horas que regalaste',
+        after:
+          'El acuerdo se recuerda donde se hizo: «Dos rondas de revisión, acordadas en el correo de firma». Sin excavar y sin ceder por no poder demostrarlo.',
+      },
+      {
+        title: 'Seguimientos que se caen',
+        before:
+          'Viernes, 17:00. Cinco posibles clientes contactados esta semana. Diez minutos para averiguar quién respondió y a quién tocaba insistir. Aun así se pasa el momento con uno.',
+        lost: 'Diez minutos de reconstrucción y el contacto que se enfrió',
+        after:
+          'El historial y los días transcurridos ya están: «Tres sin responder, uno toca hoy». Nada que reconstruir, nada que perder.',
+      },
     ],
     featuresEyebrow: 'IA para todo el flujo de clientes',
     featuresTitle: 'De señales dispersas a trabajo listo para el cliente',
@@ -196,23 +280,51 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroAccent: 'privaten Gedächtnis',
     heroCta: 'Frühzugang anfragen',
     proof: ['Local-first-Gedächtnis', 'Eigene KI wählen', 'Freigabe vor dem Senden'],
-    comparisonEyebrow: 'Die ShogunAI-Arbeitsweise',
-    comparisonTitle: 'Kundenarbeit ist fragmentiert. Verbinden wir sie wieder.',
+    comparisonEyebrow: 'Ein Tag zwischen Kunden',
+    comparisonTitle: 'Die Zeit fürs Umschalten — zurück',
     comparisonBody:
-      'Wechsle vom manuellen Zusammensetzen verstreuten Kontexts zu einem privaten Gedächtnis, das vor Arbeitsbeginn bereitsteht.',
-    oldTitle: 'Die bisherige Arbeitsweise',
-    newTitle: 'Die ShogunAI-Arbeitsweise',
-    oldItems: [
-      'In E-Mails, Dokumenten, Meetings und Notizen suchen',
-      'Die Kundengeschichte vor jedem Gespräch neu zusammensetzen',
-      'Zusagen und Follow-ups nur im Kopf behalten',
-      'Bei jedem Kundenwechsel erneut Aufmerksamkeit aufbringen',
-    ],
-    newItems: [
-      'Kundenkontext aus dem privaten Arbeitsgedächtnis abrufen',
-      'Briefings aus bereits vorhandenem Kontext vorbereiten',
-      'Follow-ups entwerfen und vor dem Versand prüfen',
-      'Gedächtnis standardmäßig lokal halten und Freigaben steuern',
+      'Fünf Momente aus einem Tag zwischen mehreren Kunden. Links heute, rechts derselbe Tag mit ShogunAI.',
+    cases: [
+      {
+        title: 'Zwischen Kunden wechseln',
+        before:
+          'Du bist mitten im Design für Kunde A, als B etwas Dringendes schickt. Vor dem Start gehen acht Minuten dafür drauf, zu rekonstruieren, was du B zuletzt geliefert hast und worauf du wartest. B erledigt, zurück zu A — und dort ist dein eigener Faden weg.',
+        lost: 'Acht Minuten pro Wechsel und der Faden, den du in A hattest',
+        after:
+          'Der Stand jedes Auftrags bleibt erhalten: Beim Wechsel zu B steht da „B — letzte Woche das Konzept geliefert, wartet auf Rückmeldung“. Zurück in A läuft die Arbeit weiter. Das Erinnern gehört nicht mehr zum Tag.',
+      },
+      {
+        title: 'Worauf ein Angebot fußt',
+        before:
+          'Eine neue Anfrage. Etwas Ähnliches hast du gebaut, aber weder Preis noch tatsächliche Dauer sind abrufbar: fünfzehn Minuten in alten Threads, dann ein Angebot aus dem Bauch, das zur Hälfte kippt.',
+        lost: 'Fünfzehn Minuten Suche und ein Preis auf Basis dessen, was es wirklich gekostet hat',
+        after:
+          'Frühere Aufträge bleiben mit ihren Zahlen: „Ähnliche Landingpage — X berechnet, tatsächlich Y Tage, zwei über Schätzung.“ Aus dem Bauch schätzen ist nicht mehr die Methode.',
+      },
+      {
+        title: 'Was dieser Kunde nicht erträgt',
+        before:
+          'Du beginnst ein Angebot für Kunde C. Irgendwann kam ein lockerer Ton schlecht an, sicher bist du nicht — zehn Minuten zurück durch alte Nachrichten.',
+        lost: 'Zehn Minuten Prüfen und die Mine, in die du fast wieder getreten wärst',
+        after:
+          'Beim Schreiben erscheint: „C bevorzugt einen formellen Ton — hat deinen lockeren Entwurf vor zwei Monaten moniert.“ Keine Suche, kein zweiter Tritt in dieselbe Mine.',
+      },
+      {
+        title: 'Konditionen, die niemand findet',
+        before:
+          '„Eine Korrekturrunde geht doch noch, oder?“ Bei Vertragsschluss waren es zwei, aber wo das steht, weißt du nicht, kannst es nicht zeigen und machst es umsonst.',
+        lost: 'Die Konditionen, die du vereinbart hattest, und die verschenkten Stunden',
+        after:
+          'Die Absprache bleibt dort, wo sie getroffen wurde: „Zwei Korrekturrunden, vereinbart in der Mail zum Vertrag.“ Kein Ausgraben, kein Einknicken mangels Beleg.',
+      },
+      {
+        title: 'Follow-ups, die durchfallen',
+        before:
+          'Freitag, 17 Uhr. Fünf Interessenten diese Woche angeschrieben. Zehn Minuten, um herauszufinden, wer geantwortet hat und wer eine Erinnerung braucht. Einer wird trotzdem kalt.',
+        lost: 'Zehn Minuten Rekonstruktion und der eine, den du hast liegen lassen',
+        after:
+          'Verlauf und vergangene Tage sind erfasst: „Drei ohne Antwort — bei einem ist heute der Zeitpunkt.“ Nichts zu rekonstruieren, nichts zu verlieren.',
+      },
     ],
     featuresEyebrow: 'KI für den gesamten Kundenworkflow',
     featuresTitle: 'Von verstreuten Signalen zu kundenfertiger Arbeit',
@@ -246,22 +358,51 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AI-powered company context',
     heroTitle: 'Every company decision, in one',
     heroAccent: 'private memory',
-    comparisonTitle: 'Company context is fragmented. Lead with the full picture.',
+    comparisonEyebrow: 'What a day actually looks like',
+    comparisonTitle: 'The hours you spend remembering, back',
     comparisonBody:
-      'Connect product, hiring, customers, fundraising, and operations so the next decision starts from what the company already knows.',
-    oldTitle: 'The old way',
-    newTitle: 'The ShogunAI way',
-    oldItems: [
-      'Search across product, hiring, customer, and fundraising tools',
-      'Rebuild the company story before every investor or board update',
-      'Lose decision rationale after only the final document remains',
-      'Carry commitments across every role in your head',
-    ],
-    newItems: [
-      'Recall company context from your private work memory',
-      'Prepare investor and board briefings from context you already have',
-      'Recover the reasoning behind a decision before making the next one',
-      'Draft updates and review them before they leave your control',
+      'Five moments from a day spent across several businesses. On the left, today. On the right, the same day with ShogunAI in it.',
+    cases: [
+      {
+        title: 'Rebuilding the morning',
+        before:
+          'Slack, notes, the tabs still open from yesterday: twenty-five minutes assembling where everything stands. Each thing you recall pushes out another. You still miss that the client on business B changed terms on Friday.',
+        lost: 'Twenty-five minutes rebuilt from scratch, and the change you never saw',
+        after:
+          'The brief is waiting when you sit down. At the top: “B — client pulled the deadline forward by a week on Friday.” Under it, today across all three businesses, in priority order. Remembering last week is not part of the morning, and where your hours should go today comes with it.',
+      },
+      {
+        title: 'The half hour after every meeting',
+        before:
+          'The call ends and you write out what was decided, then a version to share: thirty minutes. And who actually said what is already blurred.',
+        lost: 'Thirty minutes per meeting, and the attribution',
+        after:
+          'The moment the meeting ends, decisions, owners and to-dos are laid out — owners are right, because who said what was captured. It has already checked against last week: “You decided X last week; today’s conclusion contradicts it.” The email and the Slack post are drafted underneath. Read them, press a key, they are sent.',
+      },
+      {
+        title: 'Numbers for the investor update',
+        before:
+          'To put figures in the deck you go back through old spreadsheets and Slack, search, copy, paste: twenty minutes. And the number you paste is last month’s, not this one.',
+        lost: 'Twenty minutes of hunting, and the stale number now in the deck',
+        after:
+          'The figures and their latest revisions are already held, so the deck arrives with current values in it. No re-pasting. The month-on-month comparison you never had time to build comes with it.',
+      },
+      {
+        title: 'Promises you cannot place',
+        before:
+          'You told three people in Slack it would be done by next week — you cannot now say which three. One is forgotten entirely until Monday, when they ask.',
+        lost: 'The promises you made out loud',
+        after:
+          'Commitments are picked out of the conversation as they happen, so Friday reads: “Three promises made this week — one not started.” Nothing to recall, and nothing to forget.',
+      },
+      {
+        title: 'Decisions scattered everywhere',
+        before:
+          '“How did we land on that?” The reasoning sits across Slack, email and meetings and cannot be seen whole. It was your own call, and the why has gone soft.',
+        lost: 'The trail of your own decision-making',
+        after:
+          'Decisions are remembered in sequence, so the trail runs as one line. Nothing to excavate, and why the call was made is legible in one pass.',
+      },
     ],
     featuresEyebrow: 'AI for the founder operating system',
     featuresTitle: 'From daily signals to decision-ready work',
@@ -289,22 +430,51 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AIでつなぐ経営の文脈',
     heroTitle: 'すべての経営判断を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
-    comparisonTitle: '分散した会社の文脈を、次の判断につなぐ。',
+    comparisonEyebrow: '1日の中で起きていること',
+    comparisonTitle: '思い出すための時間が、そのまま消える',
     comparisonBody:
-      'プロダクト、採用、顧客、資金調達、業務の経緯をつなぎ、会社がすでに知っていることから次の判断を始めます。',
-    oldTitle: 'これまでの経営業務',
-    newTitle: 'ShogunAIなら',
-    oldItems: [
-      'プロダクト、採用、顧客、資金調達の情報を横断して探す',
-      '投資家・取締役会向けの説明を毎回ゼロから組み立てる',
-      '最終資料だけが残り、判断理由が失われる',
-      '役割を切り替えながら約束事項を頭の中で抱える',
-    ],
-    newItems: [
-      'プライベートな仕事の記憶から会社の文脈を呼び出す',
-      '既存の経緯から投資家・取締役会ブリーフを準備する',
-      '次の判断前に、過去の理由と前提を取り戻す',
-      '更新を下書きし、外部へ出る前に確認する',
+      '複数の事業を持つ人の1日から5つ。左が今、右が ShogunAI を挟んだあとです。',
+    cases: [
+      {
+        title: '朝、状況を組み立て直す',
+        before:
+          'Slack、メモ、開いたままのタブをすべて開いて進捗を確認する。ひとつ思い出すと別のひとつを忘れる。25分かけても、B事業で先方が金曜に条件を変えていたことには気づかないままだった。',
+        lost: '再構築した25分と、気づかなかった金曜の変更',
+        after:
+          '朝にはブリーフが届いている。最上部に「B事業: 金曜に先方が納期を1週間前倒し」。その下に3事業ぶんの今日やることが優先度つきで並ぶ。先週を思い出す作業が発生しない。今日どの事業に時間を割くべきかの提案まで、向こうから届く。',
+      },
+      {
+        title: '会議のあとの30分',
+        before:
+          '終わるたびに決定事項を書き出し、共有文を作って30分。しかも誰がどの発言をしたのかは、あとから正確には辿れない。',
+        lost: '会議のたびに戻ってこない30分と、発言の主',
+        after:
+          '会議が終わると同時に、決定事項・担当・ToDoが揃っている（誰の発言かを覚えているので担当が正確）。先週の決定との矛盾チェックまで済んでいて「先週はXと決めましたが、今日の結論と食い違います」と指摘が出る。関係者へのメールとSlackの共有文も下書き済みで、内容を確認してキーを押すだけで送れる。',
+      },
+      {
+        title: '投資家向け資料の数字',
+        before:
+          '資料に数字を入れるため、過去のスプレッドシートとSlackを遡り、検索してコピペで20分。しかも最新ではなく古い数字を貼ってしまう。',
+        lost: '探し回った20分と、資料に載った古い数値',
+        after:
+          '数字と最新の更新を覚えているので、最新値が入った状態で資料ができている。貼り直す作業が発生しない。時間がなくて作れなかった先月との比較まで付いてくる。',
+      },
+      {
+        title: '誰に何を約束したか',
+        before:
+          'Slackで「来週までにやります」と3人に言ったはずが、誰に言ったか覚えていない。1件は完全に忘れ、月曜に相手からの連絡で発覚する。',
+        lost: '自分が口にした約束そのもの',
+        after:
+          '会話の中の約束を拾って覚えているので、金曜の時点で「今週した約束3件、うち1件未着手」と出る。思い出す作業も、忘れること自体も起きない。',
+      },
+      {
+        title: '散らばった意思決定',
+        before:
+          '「あれ、どう決めたんだっけ」。判断の経緯がSlack・メール・会議に散らばっていて、全体像が追えない。自分が下した決定なのに、なぜそうしたのかがぼやけている。',
+        lost: '自分がたどってきた意思決定の履歴',
+        after:
+          '決定に関する時系列を覚えているので、経緯が一本につながる。掘り起こす作業が発生しない。なぜこの決定なのかを一度に把握できる。',
+      },
     ],
     featuresEyebrow: '創業者の経営業務を支えるAI',
     featuresTitle: '日々の兆しを、判断できる仕事へ',
@@ -331,22 +501,51 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'Contexto empresarial impulsado por IA',
     heroTitle: 'Cada decisión de la empresa, en una',
     heroAccent: 'memoria privada',
-    comparisonTitle: 'El contexto de la empresa está fragmentado. Lidera con la imagen completa.',
+    comparisonEyebrow: 'Cómo es un día de verdad',
+    comparisonTitle: 'Las horas que dedicas a recordar, devueltas',
     comparisonBody:
-      'Conecta producto, contratación, clientes, financiación y operaciones para empezar cada decisión con lo que la empresa ya sabe.',
-    oldTitle: 'La forma anterior',
-    newTitle: 'La forma ShogunAI',
-    oldItems: [
-      'Buscar entre herramientas de producto, contratación, clientes y financiación',
-      'Reconstruir la historia antes de cada actualización para inversores o consejo',
-      'Perder las razones de una decisión cuando solo queda el documento final',
-      'Guardar en tu cabeza compromisos de todas tus funciones',
-    ],
-    newItems: [
-      'Recuperar contexto empresarial desde tu memoria privada de trabajo',
-      'Preparar briefings para inversores y consejo con el contexto existente',
-      'Recuperar las razones de una decisión antes de tomar la siguiente',
-      'Redactar actualizaciones y revisarlas antes de compartirlas',
+      'Cinco momentos de un día repartido entre varios negocios. A la izquierda, hoy. A la derecha, el mismo día con ShogunAI.',
+    cases: [
+      {
+        title: 'Reconstruir la mañana',
+        before:
+          'Slack, notas, las pestañas de ayer: veinticinco minutos para montar dónde está todo. Cada cosa que recuerdas expulsa otra. Y sigues sin ver que el cliente del negocio B cambió condiciones el viernes.',
+        lost: 'Veinticinco minutos reconstruidos y el cambio que nunca viste',
+        after:
+          'El resumen te espera. Arriba: «B: el cliente adelantó una semana la entrega el viernes». Debajo, el día en los tres negocios por prioridad. Recordar la semana pasada deja de ser parte de la mañana, y llega también dónde conviene poner las horas de hoy.',
+      },
+      {
+        title: 'La media hora posterior a cada reunión',
+        before:
+          'Termina la llamada y escribes lo decidido y una versión para compartir: treinta minutos. Y quién dijo qué ya está borroso.',
+        lost: 'Treinta minutos por reunión y la atribución',
+        after:
+          'Al terminar, decisiones, responsables y tareas están listos, con los responsables correctos porque se recuerda quién dijo cada cosa. Además compara con la semana anterior: «La semana pasada decidiste X; la conclusión de hoy lo contradice». El correo y el mensaje de Slack están redactados: revisas y envías con una tecla.',
+      },
+      {
+        title: 'Los números del informe a inversores',
+        before:
+          'Para meter cifras vuelves a hojas de cálculo y a Slack, buscas, copias y pegas: veinte minutos. Y el número que pegas es el del mes pasado.',
+        lost: 'Veinte minutos de búsqueda y el dato caducado ya pegado',
+        after:
+          'Las cifras y sus últimas revisiones ya están guardadas, así que el documento sale con los valores actuales. Sin volver a pegar, y con la comparativa mensual que nunca tenías tiempo de montar.',
+      },
+      {
+        title: 'Promesas que no logras situar',
+        before:
+          'Dijiste en Slack a tres personas que lo tendrías la semana que viene y ya no sabes a cuáles. Una se olvida del todo hasta que el lunes preguntan.',
+        lost: 'Las promesas que hiciste en voz alta',
+        after:
+          'Los compromisos se detectan en la conversación, así que el viernes dice: «Tres promesas esta semana, una sin empezar». Nada que recordar y nada que olvidar.',
+      },
+      {
+        title: 'Decisiones dispersas',
+        before:
+          '«¿Cómo acabamos decidiendo eso?» El razonamiento está repartido entre Slack, correo y reuniones y no se ve entero. Fue tu decisión y el porqué se ha difuminado.',
+        lost: 'El rastro de tus propias decisiones',
+        after:
+          'Las decisiones se recuerdan en secuencia, así que el rastro se lee de una sola línea. Nada que excavar y el porqué queda claro de una pasada.',
+      },
     ],
     featuresEyebrow: 'IA para el sistema operativo del fundador',
     featuresTitle: 'De señales diarias a trabajo listo para decidir',
@@ -375,22 +574,51 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'KI-gestützter Unternehmenskontext',
     heroTitle: 'Jede Unternehmensentscheidung in einem',
     heroAccent: 'privaten Gedächtnis',
-    comparisonTitle: 'Unternehmenskontext ist fragmentiert. Führe mit dem Gesamtbild.',
+    comparisonEyebrow: 'Wie ein Tag wirklich aussieht',
+    comparisonTitle: 'Die Stunden fürs Erinnern — zurück',
     comparisonBody:
-      'Verbinde Produkt, Recruiting, Kunden, Finanzierung und Betrieb, damit jede Entscheidung mit dem vorhandenen Wissen beginnt.',
-    oldTitle: 'Die bisherige Arbeitsweise',
-    newTitle: 'Die ShogunAI-Arbeitsweise',
-    oldItems: [
-      'In Produkt-, Recruiting-, Kunden- und Finanzierungstools suchen',
-      'Die Unternehmensgeschichte vor jedem Investoren- oder Board-Update neu aufbauen',
-      'Entscheidungsgründe verlieren, sobald nur das Enddokument bleibt',
-      'Zusagen aus allen Rollen im Kopf behalten',
-    ],
-    newItems: [
-      'Unternehmenskontext aus dem privaten Arbeitsgedächtnis abrufen',
-      'Investoren- und Board-Briefings aus vorhandenem Kontext vorbereiten',
-      'Vor der nächsten Entscheidung die bisherigen Gründe zurückholen',
-      'Updates entwerfen und vor dem Teilen prüfen',
+      'Fünf Momente aus einem Tag zwischen mehreren Geschäften. Links heute, rechts derselbe Tag mit ShogunAI.',
+    cases: [
+      {
+        title: 'Den Morgen neu zusammensetzen',
+        before:
+          'Slack, Notizen, die Tabs von gestern: fünfundzwanzig Minuten, um den Stand zusammenzusetzen. Jede Erinnerung verdrängt eine andere. Und dass der Kunde in Geschäft B am Freitag die Konditionen geändert hat, siehst du trotzdem nicht.',
+        lost: 'Fünfundzwanzig Minuten Wiederaufbau und die Änderung, die du nie gesehen hast',
+        after:
+          'Das Briefing liegt bereit. Oben: „B — Kunde hat den Termin am Freitag um eine Woche vorgezogen.“ Darunter der Tag über alle drei Geschäfte, nach Priorität. Die letzte Woche zu rekonstruieren gehört nicht mehr zum Morgen — und wohin die Stunden heute gehören, kommt mit.',
+      },
+      {
+        title: 'Die halbe Stunde nach jedem Meeting',
+        before:
+          'Das Gespräch endet, du schreibst Entscheidungen auf und dann eine Fassung zum Teilen: dreißig Minuten. Und wer was gesagt hat, ist schon verschwommen.',
+        lost: 'Dreißig Minuten pro Meeting und die Zuordnung',
+        after:
+          'Sobald das Meeting endet, liegen Entscheidungen, Verantwortliche und To-dos bereit — korrekt zugeordnet, weil festgehalten ist, wer was gesagt hat. Der Abgleich mit der Vorwoche ist erledigt: „Letzte Woche hast du X entschieden; das widerspricht dem heutigen Ergebnis.“ Mail und Slack-Post stehen als Entwurf darunter: prüfen, Taste, raus.',
+      },
+      {
+        title: 'Zahlen fürs Investoren-Update',
+        before:
+          'Für die Zahlen zurück in alte Tabellen und Slack, suchen, kopieren, einfügen: zwanzig Minuten. Und die eingefügte Zahl ist die vom Vormonat.',
+        lost: 'Zwanzig Minuten Suche und die veraltete Zahl, die jetzt im Deck steht',
+        after:
+          'Zahlen und ihre letzten Änderungen sind gehalten, das Deck entsteht mit aktuellen Werten. Kein Neu-Einfügen — und der Monatsvergleich, für den nie Zeit war, kommt mit.',
+      },
+      {
+        title: 'Zusagen, die du nicht zuordnest',
+        before:
+          'Du hast drei Leuten in Slack „bis nächste Woche“ zugesagt und weißt nicht mehr, welchen dreien. Eine fällt komplett aus, bis am Montag nachgefragt wird.',
+        lost: 'Die Zusagen, die du ausgesprochen hast',
+        after:
+          'Zusagen werden im Gespräch erkannt, also steht am Freitag: „Drei Zusagen diese Woche — eine nicht begonnen.“ Nichts zu erinnern, nichts zu vergessen.',
+      },
+      {
+        title: 'Verstreute Entscheidungen',
+        before:
+          '„Wie sind wir da eigentlich hingekommen?“ Die Begründung liegt über Slack, Mail und Meetings verteilt und ist nie als Ganzes zu sehen. Es war deine Entscheidung, und das Warum ist weich geworden.',
+        lost: 'Die Spur deiner eigenen Entscheidungen',
+        after:
+          'Entscheidungen bleiben in ihrer Reihenfolge, die Spur liest sich als eine Linie. Nichts auszugraben, und das Warum ist in einem Durchgang lesbar.',
+      },
     ],
     featuresEyebrow: 'KI für das Betriebssystem von Gründern',
     featuresTitle: 'Von täglichen Signalen zu entscheidungsreifer Arbeit',
@@ -422,22 +650,51 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AI-powered product work',
     heroTitle: 'Every product decision, in one',
     heroAccent: 'private memory',
-    comparisonTitle: 'Product work is fragmented. Connect decision to delivery.',
+    comparisonEyebrow: 'What happens mid-implementation',
+    comparisonTitle: 'No more loading it all back in',
     comparisonBody:
-      'Bring customer evidence, discussion, design, and implementation into one private context layer that carries the why forward.',
-    oldTitle: 'The old way',
-    newTitle: 'The ShogunAI way',
-    oldItems: [
-      'Search across chat, documents, design files, and issue trackers',
-      'Lose the rationale once a decision becomes a ticket',
-      'Rebuild context manually for every brief and handoff',
-      'Restart the project story after every interruption',
-    ],
-    newItems: [
-      'Recall decisions from your private project memory',
-      'Connect customer evidence, design constraints, and implementation history',
-      'Prepare briefs and handoffs from context you already have',
-      'Draft updates and review consequential actions before they run',
+      'Five moments from a day spent across several codebases. On the left, today. On the right, the same day with ShogunAI in it.',
+    cases: [
+      {
+        title: 'Coming back from an interruption',
+        before:
+          'You are deep in a feature when a production incident takes forty minutes. Back at the editor, what you were thinking and what you meant to touch next are gone; fifteen minutes go into rebuilding it.',
+        lost: 'Fifteen minutes of rebuilding, and the thread you were holding',
+        after:
+          'The state just before the interruption is held: you return to “you were writing error handling for this function, tests were next.” The rebuild is not part of the day.',
+      },
+      {
+        title: 'Why the code is like that',
+        before:
+          'A project you have not touched in three weeks. A function is shaped oddly and you spend twenty minutes back through Slack and PR comments reconstructing why you did that.',
+        lost: 'Twenty minutes of excavation, and the reasoning the code never carried',
+        after:
+          'The discussion and the decision behind it are remembered: open the file and “this shape avoids the external API rate limit — from Slack, three weeks ago.” The excavation stops happening.',
+      },
+      {
+        title: 'Switching repositories',
+        before:
+          'Mid-feature for A when B needs an emergency fix. Opening B, ten minutes go into recalling the layout, the branch you were on and what was half-done. Back in A, the thread has snapped.',
+        lost: 'Ten minutes of reloading, and the thread in A',
+        after:
+          'Each project keeps its state, so opening B reads “B — on the retry branch implementing the webhook, next is the migration.” Return to A and the work resumes. Nothing to load back in.',
+      },
+      {
+        title: 'Solving the same thing twice',
+        before:
+          'A build error you have definitely seen before. You cannot recall which project it was or what fixed it, so it costs another hour to work out.',
+        lost: 'An hour spent again, and an answer you had already found',
+        after:
+          'Past fixes are remembered, so the same error arrives with “solved two months ago on another project — the cause was the pinned toolchain version.” No re-deriving, and the fixes you keep scattering start accumulating in one place.',
+      },
+      {
+        title: 'Requirements in fragments',
+        before:
+          'Before you can start, forty minutes go into gathering days of requirements from Slack, hallway conversations, issues and notes. One spec change from three days ago is missed, and the work is redone after the fact.',
+        lost: 'Forty minutes of gathering, and the change you missed — the rework it caused',
+        after:
+          'Days of discussion are already held, so the spec arrives structured to the level you can build from, changes included. Nothing to gather, nothing missed, and the reasoning behind each decision stays attached.',
+      },
     ],
     featuresEyebrow: 'AI across the product lifecycle',
     featuresTitle: 'From scattered decisions to delivery-ready context',
@@ -466,21 +723,51 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AIでつなぐプロダクト業務',
     heroTitle: 'すべてのプロダクト判断を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
-    comparisonTitle: '分断したプロダクト業務を、判断から提供までつなぐ。',
-    comparisonBody: '顧客の声、議論、設計、実装をひとつのプライベートな文脈につなぎ、判断理由を次の工程へ運びます。',
-    oldTitle: 'これまでのプロダクト業務',
-    newTitle: 'ShogunAIなら',
-    oldItems: [
-      'チャット、文書、デザイン、課題管理を横断して探す',
-      '判断がチケットになると、その理由が失われる',
-      '仕様書や引き継ぎのたびに文脈を手作業で組み立てる',
-      '中断から戻るたびにプロジェクトの経緯をたどり直す',
-    ],
-    newItems: [
-      'プライベートなプロジェクト記憶から判断を呼び出す',
-      '顧客の根拠、設計上の制約、実装履歴をつなぐ',
-      '既存の文脈から仕様書や引き継ぎを準備する',
-      '更新を下書きし、重要操作は実行前に確認する',
+    comparisonEyebrow: '実装の途中で起きていること',
+    comparisonTitle: '頭に積み直す時間が、要らなくなる',
+    comparisonBody:
+      '複数のコードベースを行き来する人の1日から5つ。左が今、右が ShogunAI を挟んだあとです。',
+    cases: [
+      {
+        title: '中断からの復帰',
+        before:
+          '機能を実装している最中に本番障害の対応が入り、40分中断。戻ると「さっき何を考えていて、次はどこを直す予定だったか」が思い出せず、立て直すのに15分かかる。',
+        lost: '立て直しの15分と、中断直前の思考の流れ',
+        after:
+          '中断直前の作業状態を覚えているので、戻ると「この関数のエラーハンドリングを書いていて、次はテストを追加する予定でした」と流れごと戻る。立て直す作業が発生しない。',
+      },
+      {
+        title: '設計判断の理由',
+        before:
+          '3週間ぶりに触るプロジェクト。ある関数が妙な作りになっていて「なぜこうした?」と当時のSlackとPRコメントを遡り、理由を再構築して20分。',
+        lost: '掘り返した20分と、コードに残らなかった判断理由',
+        after:
+          '当時の議論と決定理由を覚えているので、その箇所を開くと「この設計にした理由: 外部APIのレート制限を回避するため（3週間前のSlackより）」が出る。理由を掘り返す作業が消える。',
+      },
+      {
+        title: 'プロジェクト間の切り替え',
+        before:
+          'A社の開発中にB社の緊急対応。Bのリポジトリを開いても「この構成はどうなっていたか、今どのブランチで何をやりかけか」を思い出すのに10分。Aに戻ると作業の流れが切れている。',
+        lost: 'ロードし直す10分と、切れた作業の流れ',
+        after:
+          '各プロジェクトの作業状態を保持しているので、Bを開いた瞬間に「Bは◯◯ブランチで△△を実装中、次は□□」が出る。Aに戻れば続きが戻る。積み直す作業が発生しない。',
+      },
+      {
+        title: '同じ解決の再発',
+        before:
+          'ビルドエラーに遭遇。「これは前にも見た、解決したはず」だが、どのプロジェクトでどう直したか思い出せず、また1時間かけて調べ直す。',
+        lost: '調べ直した1時間と、一度は自分が出した答え',
+        after:
+          '過去の解決を覚えているので、同じエラーに当たると「2ヶ月前に別プロジェクトで解決済み: ◯◯が原因」と出る。調べ直す作業が消える。散逸していた解決のナレッジが手元に積み上がる。',
+      },
+      {
+        title: '仕様の断片の集約',
+        before:
+          '実装に着手する前に、Slack・口頭・issue・メモへ散らばった数日ぶんの要件を集めて仕様に整理して40分。3日前に決まった仕様変更を1つ拾い忘れ、実装後に手戻り。',
+        lost: '集約の40分と、拾い忘れた仕様変更（＝手戻り）',
+        after:
+          '数日ぶんの議論を全部覚えているので、変更も含めて実装できる粒度の仕様に構造化済み。集める作業も、拾い忘れも起きない。決定に至った理由まで残る。',
+      },
     ],
     featuresEyebrow: 'プロダクトライフサイクルを支えるAI',
     featuresTitle: '散らばった判断を、提供できる文脈へ',
@@ -507,22 +794,51 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'Trabajo de producto impulsado por IA',
     heroTitle: 'Cada decisión de producto, en una',
     heroAccent: 'memoria privada',
-    comparisonTitle: 'El trabajo de producto está fragmentado. Conecta decisión y entrega.',
+    comparisonEyebrow: 'Lo que pasa a mitad de la implementación',
+    comparisonTitle: 'Se acabó volver a cargarlo todo en la cabeza',
     comparisonBody:
-      'Une evidencia de clientes, conversaciones, diseño e implementación en una capa privada que conserva el porqué.',
-    oldTitle: 'La forma anterior',
-    newTitle: 'La forma ShogunAI',
-    oldItems: [
-      'Buscar entre chat, documentos, diseños y gestores de incidencias',
-      'Perder las razones cuando una decisión se convierte en una tarea',
-      'Reconstruir contexto manualmente para cada briefing y traspaso',
-      'Reiniciar la historia del proyecto después de cada interrupción',
-    ],
-    newItems: [
-      'Recuperar decisiones desde tu memoria privada de proyecto',
-      'Conectar evidencia de clientes, restricciones de diseño e historial de implementación',
-      'Preparar briefings y traspasos con el contexto existente',
-      'Redactar actualizaciones y revisar acciones importantes antes de ejecutarlas',
+      'Cinco momentos de un día repartido entre varias bases de código. A la izquierda, hoy. A la derecha, el mismo día con ShogunAI.',
+    cases: [
+      {
+        title: 'Volver tras una interrupción',
+        before:
+          'Estás dentro de una función cuando una incidencia en producción se lleva cuarenta minutos. Al volver, lo que pensabas y lo que ibas a tocar ya no está: quince minutos para rehacerlo.',
+        lost: 'Quince minutos de reconstrucción y el hilo que llevabas',
+        after:
+          'El estado justo anterior a la interrupción queda guardado: vuelves a «estabas escribiendo el manejo de errores de esta función; lo siguiente eran los tests». La reconstrucción desaparece.',
+      },
+      {
+        title: 'Por qué el código es así',
+        before:
+          'Un proyecto que no tocas desde hace tres semanas. Una función tiene una forma rara y pasas veinte minutos entre Slack y comentarios de PR reconstruyendo por qué.',
+        lost: 'Veinte minutos de excavación y el motivo que el código nunca guardó',
+        after:
+          'La discusión y la decisión se recuerdan: abres el archivo y aparece «esta forma evita el límite de la API externa, según Slack hace tres semanas». La excavación deja de ocurrir.',
+      },
+      {
+        title: 'Cambiar de repositorio',
+        before:
+          'A mitad de una función para A, B necesita un arreglo urgente. Al abrir B pierdes diez minutos recordando la estructura, la rama y qué quedó a medias. Al volver a A, el hilo se ha roto.',
+        lost: 'Diez minutos de recarga y el hilo en A',
+        after:
+          'Cada proyecto conserva su estado: abrir B muestra «B: rama de reintentos, implementando el webhook; después, la migración». Al volver a A el trabajo sigue. Nada que recargar.',
+      },
+      {
+        title: 'Resolver dos veces lo mismo',
+        before:
+          'Un error de compilación que ya has visto. No recuerdas en qué proyecto ni cómo lo arreglaste, así que se va otra hora en averiguarlo.',
+        lost: 'Otra hora gastada y una respuesta que ya habías encontrado',
+        after:
+          'Las soluciones anteriores se recuerdan: el mismo error llega con «resuelto hace dos meses en otro proyecto: la causa era la versión fijada». Sin volver a deducirlo, y ese conocimiento disperso empieza a acumularse en un sitio.',
+      },
+      {
+        title: 'Requisitos en fragmentos',
+        before:
+          'Antes de empezar, cuarenta minutos reuniendo días de requisitos de Slack, conversaciones, issues y notas. Se escapa un cambio de hace tres días y hay que rehacer trabajo.',
+        lost: 'Cuarenta minutos de recopilación y el cambio que se escapó (y su retrabajo)',
+        after:
+          'Los días de discusión ya están guardados, así que la especificación llega estructurada al nivel con el que puedes construir, cambios incluidos. Nada que reunir, nada que se escape, y el porqué de cada decisión queda anotado.',
+      },
     ],
     featuresEyebrow: 'IA para todo el ciclo de producto',
     featuresTitle: 'De decisiones dispersas a contexto listo para entregar',
@@ -551,22 +867,51 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'KI-gestützte Produktarbeit',
     heroTitle: 'Jede Produktentscheidung in einem',
     heroAccent: 'privaten Gedächtnis',
-    comparisonTitle: 'Produktarbeit ist fragmentiert. Verbinde Entscheidung und Auslieferung.',
+    comparisonEyebrow: 'Was mitten in der Umsetzung passiert',
+    comparisonTitle: 'Nichts mehr neu in den Kopf laden',
     comparisonBody:
-      'Führe Kundensignale, Diskussion, Design und Umsetzung in einer privaten Kontextebene zusammen, die das Warum weiterträgt.',
-    oldTitle: 'Die bisherige Arbeitsweise',
-    newTitle: 'Die ShogunAI-Arbeitsweise',
-    oldItems: [
-      'In Chat, Dokumenten, Design-Dateien und Issue-Trackern suchen',
-      'Die Begründung verlieren, sobald eine Entscheidung zum Ticket wird',
-      'Kontext für jedes Briefing und jede Übergabe manuell neu aufbauen',
-      'Nach jeder Unterbrechung die Projektgeschichte neu beginnen',
-    ],
-    newItems: [
-      'Entscheidungen aus dem privaten Projektgedächtnis abrufen',
-      'Kundensignale, Designbeschränkungen und Umsetzungshistorie verbinden',
-      'Briefings und Übergaben aus vorhandenem Kontext vorbereiten',
-      'Updates entwerfen und folgenreiche Aktionen vor der Ausführung prüfen',
+      'Fünf Momente aus einem Tag zwischen mehreren Codebasen. Links heute, rechts derselbe Tag mit ShogunAI.',
+    cases: [
+      {
+        title: 'Rückkehr nach einer Unterbrechung',
+        before:
+          'Du steckst in einem Feature, als ein Produktionsvorfall vierzig Minuten kostet. Zurück im Editor sind Gedanke und nächster Schritt weg; fünfzehn Minuten gehen in den Wiederaufbau.',
+        lost: 'Fünfzehn Minuten Wiederaufbau und der Faden, den du hattest',
+        after:
+          'Der Stand direkt vor der Unterbrechung bleibt: Du kommst zurück zu „du hast das Error-Handling dieser Funktion geschrieben, als Nächstes standen Tests an“. Der Wiederaufbau entfällt.',
+      },
+      {
+        title: 'Warum der Code so aussieht',
+        before:
+          'Ein Projekt, das du drei Wochen nicht angefasst hast. Eine Funktion ist seltsam gebaut, und zwanzig Minuten gehen durch Slack und PR-Kommentare, um den Grund zu rekonstruieren.',
+        lost: 'Zwanzig Minuten Ausgraben und die Begründung, die der Code nie trug',
+        after:
+          'Diskussion und Entscheidung bleiben erhalten: Beim Öffnen steht „diese Form umgeht das Rate-Limit der externen API — aus Slack, vor drei Wochen“. Das Ausgraben hört auf.',
+      },
+      {
+        title: 'Repository wechseln',
+        before:
+          'Mitten im Feature für A braucht B einen Notfall-Fix. Beim Öffnen von B gehen zehn Minuten für Struktur, Branch und halb fertige Arbeit drauf. Zurück in A ist der Faden gerissen.',
+        lost: 'Zehn Minuten Nachladen und der Faden in A',
+        after:
+          'Jedes Projekt behält seinen Stand: B öffnet mit „B — Retry-Branch, Webhook in Arbeit, danach die Migration“. Zurück in A läuft es weiter. Nichts nachzuladen.',
+      },
+      {
+        title: 'Dasselbe zweimal lösen',
+        before:
+          'Ein Build-Fehler, den du sicher schon hattest. In welchem Projekt und wie behoben, weißt du nicht — also noch eine Stunde.',
+        lost: 'Eine weitere Stunde und eine Antwort, die du schon hattest',
+        after:
+          'Frühere Lösungen bleiben: Derselbe Fehler kommt mit „vor zwei Monaten in einem anderen Projekt gelöst — Ursache war die gepinnte Version“. Kein erneutes Herleiten, und das verstreute Wissen sammelt sich an einer Stelle.',
+      },
+      {
+        title: 'Anforderungen in Fragmenten',
+        before:
+          'Vor dem Start vierzig Minuten, um tagelange Anforderungen aus Slack, Gesprächen, Issues und Notizen einzusammeln. Eine Änderung von vor drei Tagen fehlt, danach Nacharbeit.',
+        lost: 'Vierzig Minuten Sammeln und die übersehene Änderung (samt Nacharbeit)',
+        after:
+          'Die Diskussionen mehrerer Tage sind gehalten, die Spezifikation liegt umsetzbar strukturiert vor, Änderungen inklusive. Nichts einzusammeln, nichts zu übersehen — und die Begründung bleibt an jeder Entscheidung.',
+      },
     ],
     featuresEyebrow: 'KI über den gesamten Produktlebenszyklus',
     featuresTitle: 'Von verstreuten Entscheidungen zu lieferbereitem Kontext',
@@ -684,6 +1029,13 @@ function FollowUpVisual({ copy }: { copy: VisualCopy }) {
   );
 }
 
+const caseUi: Record<Locale, { before: string; after: string; lost: string }> = {
+  en: { before: 'Today', after: 'With ShogunAI', lost: 'What it costs:' },
+  ja: { before: 'いま', after: 'ShogunAI のあと', lost: '失われるもの:' },
+  es: { before: 'Hoy', after: 'Con ShogunAI', lost: 'Lo que cuesta:' },
+  de: { before: 'Heute', after: 'Mit ShogunAI', lost: 'Was es kostet:' },
+};
+
 export function isProductLedUseCase(slug: string): slug is UseCaseSlug {
   return slug in copyBySlug;
 }
@@ -692,6 +1044,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
   if (!isProductLedUseCase(page.slug)) return null;
 
   const copy = copyBySlug[page.slug][locale];
+  const ui = caseUi[locale];
   const homeCta = `/${locale}/#get-started`;
   const featureVisuals = [MemoryVisual, BriefVisual, FollowUpVisual];
 
@@ -744,46 +1097,46 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
               {copy.comparisonBody}
             </p>
           </div>
-          <div className="theme-light-panel border-border bg-surface mt-14 grid overflow-hidden rounded-[26px] border lg:grid-cols-2">
-            <article className="lg:border-border p-[clamp(28px,4.5vw,58px)] lg:border-r">
-              <h3 className="text-muted text-[clamp(25px,2.7vw,36px)] font-semibold tracking-[-0.035em]">
-                {copy.oldTitle}
-              </h3>
-              <ul className="mt-8 grid gap-5">
-                {copy.oldItems.map((item) => (
-                  <li
-                    key={item}
-                    className="text-muted flex items-start gap-4 text-[clamp(15px,1.25vw,18px)] leading-[1.55]"
-                  >
-                    <X className="mt-1 size-5 shrink-0 text-[#ef4d48]" strokeWidth={2.5} aria-hidden="true" />
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            </article>
-            <article className="theme-soft-section bg-[#f7f4ff] p-[clamp(28px,4.5vw,58px)]">
-              <h3 className="text-ink text-[clamp(25px,2.7vw,36px)] font-semibold tracking-[-0.035em]">
-                {copy.newTitle}
-              </h3>
-              <ul className="mt-8 grid gap-5">
-                {copy.newItems.map((item) => (
-                  <li
-                    key={item}
-                    className="text-ink flex items-start gap-4 text-[clamp(15px,1.25vw,18px)] leading-[1.55] font-medium"
-                  >
-                    <Check className="mt-1 size-5 shrink-0 text-[#25a65a]" strokeWidth={2.8} aria-hidden="true" />
-                    {item}
-                  </li>
-                ))}
-              </ul>
-              <Link
-                href={homeCta}
-                className="bg-ink text-bg mt-9 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold"
+          {/* One card per scene: what the day costs today on the left, what it costs with the memory on the right. */}
+          <div className="mt-14 grid gap-6">
+            {copy.cases.map((item) => (
+              <article
+                key={item.title}
+                className="theme-light-panel border-border bg-surface overflow-hidden rounded-[26px] border"
               >
-                {copy.heroCta}
-                <ArrowRight className="size-4" />
-              </Link>
-            </article>
+                <h3 className="border-border text-ink border-b px-[clamp(22px,3.4vw,40px)] py-6 text-[clamp(20px,2vw,27px)] font-semibold tracking-[-0.035em]">
+                  {item.title}
+                </h3>
+                <div className="grid lg:grid-cols-2">
+                  <div className="lg:border-border px-[clamp(22px,3.4vw,40px)] py-[clamp(24px,3.2vw,38px)] lg:border-r">
+                    <p className="text-muted flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
+                      <X className="size-4 text-[#ef4d48]" strokeWidth={2.6} aria-hidden="true" />
+                      {ui.before}
+                    </p>
+                    <p className="text-muted mt-5 text-[clamp(15px,1.2vw,17px)] leading-[1.7]">{item.before}</p>
+                    <p className="border-border text-muted mt-6 border-t pt-5 text-[14px] leading-[1.6]">
+                      <span className="font-semibold text-[#ef4d48]">{ui.lost}</span> {item.lost}
+                    </p>
+                  </div>
+                  <div className="theme-soft-section bg-[#f7f4ff] px-[clamp(22px,3.4vw,40px)] py-[clamp(24px,3.2vw,38px)]">
+                    <p className="text-ink flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
+                      <Check className="size-4 text-[#25a65a]" strokeWidth={2.8} aria-hidden="true" />
+                      {ui.after}
+                    </p>
+                    <p className="text-ink mt-5 text-[clamp(15px,1.2vw,17px)] leading-[1.7] font-medium">{item.after}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="mt-12 flex justify-center">
+            <Link
+              href={homeCta}
+              className="bg-ink text-bg inline-flex min-h-13 items-center gap-2 rounded-xl px-6 py-3.5 text-sm font-semibold"
+            >
+              {copy.heroCta}
+              <ArrowRight className="size-4" />
+            </Link>
           </div>
         </div>
       </section>
