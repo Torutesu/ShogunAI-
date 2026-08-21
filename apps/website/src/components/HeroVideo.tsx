@@ -26,7 +26,6 @@ export function HeroVideo({ label }: { label: string }) {
 
   return (
     <div className="hero-video-shell" data-testid="hero-product-video">
-      <div aria-hidden="true" className="hero-video-ambient" />
       <video
         ref={videoRef}
         aria-label={label}

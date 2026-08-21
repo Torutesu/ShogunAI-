@@ -392,16 +392,6 @@ html[data-theme='dark'] .theme-light-badge {
   aspect-ratio: 1200 / 904;
 }
 
-.hero-video-ambient {
-  position: absolute;
-  inset: 10% 4% 8%;
-  z-index: -1;
-  border-radius: 48%;
-  background: rgba(28, 57, 126, 0.38);
-  filter: blur(44px);
-  opacity: 0.7;
-}
-
 .hero-video {
   display: block;
   width: 100%;
@@ -416,20 +406,6 @@ html[data-theme='dark'] .theme-light-badge {
     linear-gradient(to bottom, transparent 0%, #000 8%, #000 91%, transparent 100%),
     linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
   mask-composite: intersect;
-}
-
-html:not([data-theme='dark']) .hero-video-shell {
-  filter: drop-shadow(0 30px 70px rgba(13, 42, 108, 0.2));
-}
-
-html:not([data-theme='dark']) .hero-video-ambient {
-  background: rgba(64, 102, 195, 0.3);
-  opacity: 0.56;
-}
-
-html[data-theme='dark'] .hero-video-ambient {
-  background: rgba(65, 94, 190, 0.28);
-  opacity: 0.72;
 }
 
 @media (min-width: 1024px) and (max-height: 760px) {

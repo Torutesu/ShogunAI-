@@ -7,11 +7,13 @@
 - Previous production hero capture: `/tmp/shogun-hero-final.png`
 - Enlarged implementation capture: `/tmp/shogun-hero-larger.png`
 - Side-by-side comparison: `/tmp/shogun-hero-size-comparison.png`
+- Shadow-removal capture: `/tmp/shogun-hero-no-shadow.png`
+- Shadow comparison: `/tmp/shogun-hero-shadow-comparison.png`
 - State: Japanese locale, light theme, 1280 × 720
 
 ## Intentional change
 
-The supplied live macOS product video is promoted to the visual focus of the first view. Its rendered desktop width increases from 542 px to 740 px while the left copy becomes shorter and quieter. The background treatment, conversion form, proof badges, and existing theme behavior remain intact.
+The supplied live macOS product video is promoted to the visual focus of the first view. Its rendered desktop width increases from 542 px to 740 px while the left copy becomes shorter and quieter. The conversion form, proof badges, and existing theme behavior remain intact; the outer ambient glow and drop shadow are removed so only the feathered video edge blends into the page.
 
 ## Visual review
 
@@ -40,5 +42,6 @@ The comparison confirms a clearer product-first hierarchy: the demo is materiall
 4. Added a matched poster, explicit dimensions, muted inline playback, and reduced-motion behavior.
 5. Verified desktop light, desktop dark, and mobile layouts in the in-app browser.
 6. Rebalanced the desktop columns, enlarged the video by about 36%, shortened all four localized hero descriptions, reduced headline scale, and removed the live count from the left proof row.
+7. Removed the video shell's ambient glow and light-theme drop shadow while preserving edge transparency.
 
 final result: passed
