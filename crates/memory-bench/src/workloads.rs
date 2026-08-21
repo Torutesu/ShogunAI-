@@ -269,8 +269,8 @@ impl Workload for TemporalWorkload {
         }
 
         let mut out: Vec<BenchEvent> = Vec::with_capacity(events);
-        let mut specs: Vec<(String, Vec<String>, String)> = Vec::with_capacity(tracked);
-        let mut superseded_by_project: Vec<Vec<String>> = vec![Vec::new(); tracked];
+        // Per project, the fact each revision asserted, in order.
+        let mut asserted: Vec<Vec<String>> = vec![Vec::new(); tracked];
         let mut cursor = 0usize;
         let mut filler_written = 0usize;
         for i in 0..events {
@@ -279,7 +279,13 @@ impl Workload for TemporalWorkload {
                 let (_, p, r) = planned[cursor];
                 let project = PROJECTS[p % PROJECTS.len()];
                 let value = TEMPORAL_VALUES[r];
-                let fact_id = format!("temporal-{project}-database-r{r}");
+                // Fact identity is the *value*, not the revision index. The sequence returns to an
+                // earlier value (A -> B -> A), and restating A is not a new fact — it is the same
+                // fact asserted again. Keying on `r` instead made the third statement a distinct
+                // "current" fact, which the memory layer then correctly collapsed into the first
+                // statement's row (identical text, identical content_hash), leaving the expected
+                // fact mapped to no row at all and reporting a false recall of 0.
+                let fact_id = format!("temporal-{project}-database-{}", value.to_lowercase());
                 out.push(BenchEvent {
                     ts,
                     source: "capture".to_string(),
@@ -292,11 +298,7 @@ impl Workload for TemporalWorkload {
                     dwell_ms: 0,
                     fact_id: fact_id.clone(),
                 });
-                if r + 1 == REVISIONS {
-                    specs.push((project.to_string(), superseded_by_project[p].clone(), fact_id));
-                } else {
-                    superseded_by_project[p].push(fact_id);
-                }
+                asserted[p].push(fact_id);
                 cursor += 1;
             } else if filler_written < filler {
                 out.push(chatter_event(rng, ts, i));
@@ -313,12 +315,24 @@ impl Workload for TemporalWorkload {
             out.push(chatter_event(rng, ts, index));
         }
 
-        let queries = specs
+        // The answer is whatever the last revision asserted. Anything asserted earlier that is not
+        // that fact is superseded; an earlier assertion of the *same* fact is not stale, it is the
+        // same answer stated twice.
+        let queries = asserted
             .into_iter()
-            .map(|(project, superseded, fact_id)| BenchQuery {
-                ask: format!("where does {project} store its records"),
-                expected: vec![fact_id],
-                superseded,
+            .enumerate()
+            .filter_map(|(p, facts)| {
+                let current = facts.last()?.clone();
+                let mut superseded: Vec<String> =
+                    facts.iter().filter(|f| **f != current).cloned().collect();
+                superseded.sort_unstable();
+                superseded.dedup();
+                let project = PROJECTS[p % PROJECTS.len()];
+                Some(BenchQuery {
+                    ask: format!("where does {project} store its records"),
+                    expected: vec![current],
+                    superseded,
+                })
             })
             .collect();
 
