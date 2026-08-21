@@ -388,7 +388,7 @@ html[data-theme='dark'] .theme-light-badge {
 .hero-video-shell {
   position: relative;
   isolation: isolate;
-  width: min(100%, 720px);
+  width: min(100%, 740px);
   aspect-ratio: 1200 / 904;
 }
 
@@ -555,6 +555,15 @@ html[data-theme='dark'] .hero-video-ambient {
   font-size: clamp(28px, 5.1vw, 40px);
   line-height: 1.16;
   letter-spacing: -0.035em;
+}
+
+:is(html, main)[lang='ja'] .hero-title {
+  font-size: clamp(30px, 3.3vw, 38px);
+  line-height: 1.12;
+}
+
+:is(html, main)[lang='de'] .hero-title {
+  font-size: clamp(34px, 4vw, 52px);
 }
 
 :is(html, main)[lang='ja'] .cta-title {

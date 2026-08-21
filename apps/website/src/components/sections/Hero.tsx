@@ -1,11 +1,10 @@
-import { ParticipantCount } from '@/components/ParticipantCount';
 import { Badges } from '@/components/sections/Badges';
 import { HeroVideo } from '@/components/HeroVideo';
 import { Badge } from '@/components/ui/badge';
 import { WaitlistForm } from '@/components/WaitlistForm';
 import type { Dictionary } from '@/i18n/dictionaries';
 
-export function Hero({ t, participantCount }: { t: Dictionary; participantCount: number }) {
+export function Hero({ t }: { t: Dictionary; participantCount: number }) {
   const localeCopy = t.nav.langLabel === '言語'
     ? { waitlistProof: '熱狂中', preview: 'ライブ製品', people: 'アーリーアクセス参加者' }
     : t.nav.langLabel === 'Idioma'
@@ -19,15 +18,15 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
       <div aria-hidden="true" className="hero-grid pointer-events-none absolute inset-0 -z-10" />
 
       <div className="hero-layout container-x py-6 sm:py-7 lg:pb-4 lg:pt-6">
-        <div className="grid min-h-0 items-center gap-x-10 gap-y-3 lg:grid-cols-[minmax(0,0.96fr)_minmax(460px,0.82fr)] lg:gap-y-0">
-          <div className="order-1 min-w-0 max-w-[670px] text-center lg:text-left">
+        <div className="grid min-h-0 items-center gap-x-9 gap-y-3 lg:grid-cols-[minmax(360px,0.72fr)_minmax(0,1.28fr)] lg:gap-y-0">
+          <div className="order-1 min-w-0 max-w-[520px] text-center lg:text-left">
           <div>
             <div>
               <Badge dot>{t.hero.badge}</Badge>
             </div>
 
             <div>
-              <h1 className="hero-title mt-6 max-w-[16ch] font-display text-[clamp(44px,6.5vw,78px)] font-semibold leading-[0.96] tracking-[-0.06em] text-balance sm:mt-7">
+              <h1 className="hero-title mt-5 max-w-[15ch] font-display text-[clamp(36px,4.5vw,58px)] font-semibold leading-[0.98] tracking-[-0.055em] text-balance sm:mt-6">
                 {t.hero.lineA}
                 <br />
                 <span className="hero-accent">{t.hero.lineB}</span>
@@ -35,7 +34,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
             </div>
 
             <div>
-              <p className="hero-subtitle mx-auto mt-6 max-w-[42rem] text-[17px] leading-[1.72] text-[#263653] sm:text-[18px] lg:mx-0">
+              <p className="hero-subtitle mx-auto mt-5 max-w-[32rem] text-[15px] leading-[1.65] text-[#263653] sm:text-[16px] lg:mx-0">
                 {t.hero.sub}
               </p>
             </div>
@@ -68,9 +67,8 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
                   </span>
                 </div>
                 <span className="hero-waitlist-proof text-xs font-medium text-[#4b5d7d]">{localeCopy.waitlistProof}</span>
-                <ParticipantCount initialCount={participantCount} suffix={t.scarcity.joinedSuffix} />
               </div>
-              <div className="mx-auto mt-7 max-w-[620px] lg:mx-0">
+              <div className="mx-auto mt-6 max-w-[520px] lg:mx-0">
                 <WaitlistForm labels={t.waitlist} />
               </div>
             </div>
