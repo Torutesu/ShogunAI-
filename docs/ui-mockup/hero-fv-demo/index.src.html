@@ -192,6 +192,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .badge{position:absolute;top:-3px;right:-3px;min-width:15px;height:15px;border-radius:999px;
   background:#FF3B30;color:#fff;font:600 9px/15px var(--ui);text-align:center;padding:0 4px}
 .dsep{width:1px;height:36px;background:rgba(27,29,34,.22);margin:1px 3px 0}
+/* Real Dock, screenshotted. Nothing in the reel clicks it, so a picture beats
+   twenty hand-drawn marks that are each a little bit wrong. */
+.dockimg{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);
+  width:var(--dockw,1180px);height:auto;display:none;pointer-events:none}
+body.realdock .dock{display:none}
+body.realdock .dockimg{display:block}
 
 /* 16:9 guide */
 .guide{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity 200ms ease}
@@ -570,6 +576,7 @@ Aiko</div>
       </div>
 
       <div class="dock" id="dock"></div>
+      <img class="dockimg" id="dockimg" alt="" src="__DOCK__">
       <div class="guide" id="guide"><i id="gTop"></i><i id="gBot"></i><b id="gLbl">16:9</b></div>
     </div>
   </div>
@@ -651,6 +658,7 @@ const DOCK = [
   ['SEP'],
   ['transparent','transparent',foldM(),0], ['transparent','transparent',trashM(),0]
 ];
+if($('dockimg').getAttribute('src'))document.body.classList.add('realdock');
 $('dock').innerHTML = DOCK.map(d => d[0]==='SEP' ? '<span class="dsep"></span>'
   : '<span class="dk'+(d[3]?' on':'')+'"><span class="tile" style="background:'+g2(d[0],d[1])+'">'+d[2]
     +(d[4]?'<span class="badge">'+d[4]+'</span>':'')+'</span><span class="ind"></span></span>').join('');
