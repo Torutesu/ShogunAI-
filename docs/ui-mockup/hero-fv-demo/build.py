@@ -42,5 +42,26 @@ else:
     src = src.replace("__DOCK__", "")               # falls back to the drawn dock
     print("no dock.png — using the drawn dock")
 
-(here / "index.html").write_text(src)
-print(f"index.html written — {len(src)/1024/1024:.2f} MB")
+# Two builds from the one source, differing only in whether the finished loop is carried:
+#
+#   index.html           no video. This is the one that can be shared publicly.
+#   index.download.html  the loop inlined, so the page can hand it to the viewer through the
+#                        host's `downloads` capability — which the platform refuses to grant
+#                        to a publicly-shared artifact. Publish this one privately.
+#
+# Base64 rather than a data: URI: the page decodes it to a Blob, and fetch() on a data URI is
+# not something the artifact's CSP can be relied on to allow.
+(here / "index.html").write_text(src.replace("__MP4__", ""))
+print(f"index.html written — {len(src)/1024/1024:.2f} MB (no video; shareable)")
+
+mp4 = here / "shogun-hero-mac.mp4"
+if mp4.exists():
+    full = src.replace("__MP4__", base64.b64encode(mp4.read_bytes()).decode())
+    # Distinct title: the two builds otherwise sit side by side in the artifact gallery
+    # under the same name, and only one of them can hand you the file.
+    full = full.replace("<title>Notch Arrival</title>", "<title>Notch Arrival &mdash; MP4</title>")
+    (here / "index.download.html").write_text(full)
+    print(f"index.download.html written — {len(full)/1024/1024:.2f} MB "
+          f"(carries {mp4.name}, {mp4.stat().st_size/1024/1024:.2f} MB)")
+else:
+    print("no shogun-hero-mac.mp4 — skipping index.download.html")

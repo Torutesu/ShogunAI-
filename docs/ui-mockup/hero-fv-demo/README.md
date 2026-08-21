@@ -5,7 +5,8 @@ Product Hunt ローンチ と LP ファーストビューのための、**操作
 （取得 → ワールドモデル → 実行 → 24時間実行 → 自己改善）を 15 秒で一周させる。
 「単能アプリの束ではなく一つのループである」＝パーソナルAGIの主張が、そのまま画になる。
 
-- 公開 Artifact: <https://claude.ai/code/artifact/cfe0b7e5-24ca-453c-87fd-3794e616f15e>
+- 公開 Artifact（共有用・軽い）: <https://claude.ai/code/artifact/cfe0b7e5-24ca-453c-87fd-3794e616f15e>
+- MP4 を配る Artifact（非公開のまま使う）: <https://claude.ai/code/artifact/22c48a50-aacf-4707-9537-892bf5344b51>
 - ローカルで開く: `python3 build.py` → `index.html` をブラウザで開く
 - 対応 Figma: `Product Flow — in a Mac` ページの `11 · Hero / FV`
 
@@ -15,12 +16,13 @@ Product Hunt ローンチ と LP ファーストビューのための、**操作
 |---|---|
 | `index.src.html` | **正本。** 編集はここだけ。壁紙は `__WALL__` プレースホルダ |
 | `build.py` | 壁紙を data URI で埋め込んで `index.html` を吐く |
-| `index.html` | 生成物（自己完結・外部リクエストなし）。直接編集しない |
+| `index.html` | 生成物。動画を含まない軽い版（0.5MB）。**公開共有できるのはこちら** |
+| `index.download.html` | 生成物。動画を焼き込んだ版（3.8MB）＝ Download MP4 ボタンが動く版。git 管理外 |
 | `wallpaper.jpg` | 本物の macOS Sequoia Light 標準壁紙（6K 原本を FV 比率にクロップ・縮小） |
 | `dock.png` | **任意。置けば実物の Dock に差し替わる**（後述）。無ければ下記の混成版が使われる |
 | `logos/` | 実ブランドマーク。App Store の公開アートワーク20個＋Commons の SVG 3個。出典と再取得は `logos/SOURCES.md` / `logos/fetch_appstore.py` |
-| `shogun-hero-mac.mp4` | **FV用の完成品**。閉じた状態から開く（32.5s / 1700×1280 / 4.6MB） |
-| `shogun-hero-mac-1200.mp4` | 同・幅1200版（1.7MB）。**LP 埋め込みはこれ** |
+| `shogun-hero-mac.mp4` | **FV用の完成品**。閉じた状態から開く（32.5s / 1700×1280 / 2.5MB）。`build.py` がこれをページに焼き込み、**Artifact の Download MP4 ボタンが配る**のもこの同じファイル |
+| `shogun-hero-mac-1200.mp4` | 同・幅1200版（1.1MB）。**LP 埋め込みはこれ** |
 
 Artifact は単一ファイル・外部ホスト禁止（Google Fonts のみ可）なので、写真は
 sibling asset ではなく data URI で入れている。`index.html` は生成物なので、
@@ -164,6 +166,31 @@ corroboration 上限 0.75 で **High には決して届かない**。デモの�
 `Your AI has memory. Now it acts.` に差し替わる。禁じ手（"AGI is here" 型の到達宣言、定義なしの
 単独使用）はどちらにも入れていない。
 
+## Artifact から MP4 を落とす
+
+公開ページの `Download MP4` ボタンで、いま再生しているのと同じループがそのまま落ちてくる。
+**筐体だけ**（レールも操作UIも入っていない、`?capture=1` と同じ画）。
+
+仕組みと制約:
+
+- Artifact のサンドボックスでは **`<a download>` もスクリプト保存も効かない**。ホスト側が
+  保存を担う `downloads` capability 経由でしか渡せないので、公開時に
+  `capabilities: {downloads: true}` を宣言している
+- **`downloads` を宣言した Artifact は公開共有できない**（プラットフォーム側の制約。公開中の
+  Artifact に付けようとすると 422 で弾かれる）。そのため生成物を2つに分けてある:
+  `index.html`（動画なし・軽い・公開共有できる）と `index.download.html`（動画入り・
+  非公開で使う）。同じ `index.src.html` から出る同じページで、違いは動画を持つかだけ
+- ボタンは `claude.use('downloads')` が実際に解決したときだけ現れる。ローカルで
+  `index.html` を直接開いた場合や capability なしで公開した場合は**出ない**（壊れた
+  ボタンを見せない）
+- 保存はホストの確認ダイアログを経る。断られる（`declined`）のは失敗ではないので、
+  ボタンは黙って元に戻る。上限16MiB、拡張子は許可リスト制（mp4 は可）
+- **ページは自分を H.264 に録画できない。** 配っているのは `build.py` が
+  `shogun-hero-mac.mp4` を base64 で焼き込んだもの＝オフラインで切って尺を戻した完成品。
+  だから**動画を差し替えたら `build.py` を回して再公開**しないとボタンは古い版を配り続ける
+- CRF 24 / 1700×1280 で 2.5MB に収めてある。ページ全体は 3.8MB。ここを上げると
+  ボタンを押さない大多数の閲覧者にロード時間を払わせることになる
+
 ## 録画のしかた
 
 **完成品が同梱してある**: `shogun-hero-mac.mp4`（32.5s / 1700×1280、継ぎ目なし）と
@@ -194,6 +221,8 @@ corroboration 上限 0.75 で **High には決して届かない**。デモの�
 | `←` `→` | シーンを1つずつ送る |
 | `A` | Auto-loop の切り替え |
 | `F` | MacBook の筐体あり／画面だけ |
+
+`Download MP4` ボタンだけはキーを割り当てていない（誤爆でホストの保存確認が出るため）。
 
 手で触ると Auto-loop は自動で外れる（勝手に進んで撮り損ねないため）。
 ノッチをクリックすると頭出し、`Confirm & send` で送信 — 触れる箇所は実装と同じものだけ。

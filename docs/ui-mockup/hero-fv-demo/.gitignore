@@ -1,2 +1,5 @@
-docs/ui-mockup/hero-fv-demo/dock.png
-docs/ui-mockup/hero-fv-demo/.dock.trimmed.png
+# Patterns here are relative to this directory. They were previously written as
+# repo-root paths, which a nested .gitignore never matches.
+dock.png
+.dock.trimmed.png
+index.download.html

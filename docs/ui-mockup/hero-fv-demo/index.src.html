@@ -297,14 +297,18 @@ body.realdock .dockimg{display:block}
 
 /* ── instrument rail ── */
 .rail{width:100%;max-width:1220px;margin:0 auto;padding:12px 20px 6px;
-  display:flex;align-items:center;gap:20px;flex-wrap:wrap;transition:opacity 260ms ease}
+  display:flex;align-items:center;gap:8px 20px;flex-wrap:wrap;transition:opacity 260ms ease}
 body.clean .rail,body.clean .hint{opacity:0;pointer-events:none}
-.grp{display:flex;align-items:center;gap:8px}
+.grp{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .btn{padding:7px 12px;border-radius:8px;border:1px solid var(--edge);background:var(--railbg);
   font-size:11px;letter-spacing:.4px;color:var(--muted);transition:all 160ms ease;white-space:nowrap}
 .btn:hover{color:var(--ink);border-color:var(--edge-2)}
 .btn.on{color:#06101C;background:var(--accent);border-color:var(--accent);font-weight:700}
-.beats{flex:1;min-width:380px;display:flex;gap:2px}
+/* The scene scrubber takes a row of its own (order puts it after both button groups, and
+   100% basis forces the wrap). With eleven scenes it no longer competes with the buttons
+   for width, at any viewport. */
+.beats{flex:1 1 100%;order:5;min-width:0;display:flex;gap:2px}
+.rail>.grp:last-child{margin-left:auto}
 .beat{flex:1;text-align:left;padding:8px 9px 12px;border-radius:7px;border:1px solid transparent;
   font-size:10px;letter-spacing:.3px;color:var(--dim);transition:all 200ms ease;position:relative}
 .beat:hover{color:var(--muted);background:rgba(255,255,255,.03)}
@@ -700,6 +704,7 @@ Aiko</div>
   </div>
   <div class="beats" id="beats"></div>
   <div class="grp">
+    <button class="btn" id="dl" style="display:none">Download MP4</button>
     <button class="btn on" id="frame">Mac frame</button>
     <button class="btn" id="g169">16:9 guide</button>
     <button class="btn" id="scale">100%</button>
@@ -1026,6 +1031,35 @@ addEventListener('keydown',e=>{
   if(k==='a')$('auto').click();
   if(k==='f')$('frame').click();
 });
+
+/* Handing the viewer the finished mp4.
+   An <a download> is inert inside the artifact sandbox — the host has to do the saving — so
+   the button stays hidden until claude.use('downloads') actually resolves. Opened as a local
+   file, or published without the capability, it simply never appears. The video is the same
+   loop this page plays, already cut and retimed; the page cannot record itself to H.264, so
+   build.py inlines the file that was rendered offline. */
+const MP4='__MP4__';
+(async()=>{
+  const btn=$('dl');
+  if(!MP4||MP4.charAt(0)==='_')return;                 /* this build carries no video */
+  const api=(window.claude&&claude.use)?await claude.use('downloads'):null;
+  if(!api)return;
+  btn.style.display='';
+  const label=btn.textContent;
+  const settle=t=>{btn.textContent=t;setTimeout(()=>{btn.textContent=label;btn.disabled=false},1800)};
+  btn.onclick=async()=>{
+    btn.disabled=true;btn.textContent='Saving\u2026';
+    try{
+      const bin=atob(MP4),u8=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+      await api.save({filename:'shogun-hero-mac.mp4',data:new Blob([u8])});
+      settle('Saved');
+    }catch(e){
+      /* 'declined' is the viewer saying no, not a failure — say nothing and reset. */
+      settle(e&&e.code==='rate_limited'?'Try again':e&&e.code==='declined'?label:'Unavailable');
+    }
+  };
+})();
 
 const Q=new URLSearchParams(location.search);
 /* Per docs/positioning-category-messaging.md §6: "personal AGI" is allowed in a launch
