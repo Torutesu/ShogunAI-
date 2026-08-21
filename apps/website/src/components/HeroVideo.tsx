@@ -2,8 +2,8 @@
 
 import { useEffect, useRef } from 'react';
 
-const VIDEO_LOOP_START_SECONDS = 0;
-const REDUCED_MOTION_PREVIEW_SECONDS = 0;
+const VIDEO_LOOP_START_SECONDS = 4;
+const REDUCED_MOTION_PREVIEW_SECONDS = 4;
 
 export function HeroVideo({ label }: { label: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -51,18 +51,18 @@ export function HeroVideo({ label }: { label: string }) {
           }
         }}
         playsInline
-        poster="/optimized/shogunheromac1200-open-poster.png"
+        poster="/optimized/shogunheromac1200-closed-stable.png"
         preload="metadata"
         tabIndex={-1}
         width={1200}
         height={904}
       >
         <source
-          src="/optimized/shogunheromac1200-open-clean.mov"
+          src="/optimized/shogunheromac1200-opening-static.mov"
           type='video/quicktime; codecs="hvc1"'
         />
         <source
-          src="/optimized/shogunheromac1200-open-clean.webm"
+          src="/optimized/shogunheromac1200-opening-static.webm"
           type="video/webm"
         />
       </video>
