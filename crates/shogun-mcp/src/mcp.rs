@@ -29,6 +29,20 @@ use crate::voice_dictionary_api::{
 /// The MCP protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// Does this tool result carry a failure? Every error path on this face renders a JSON object
+/// with an `error` key as its text, so that is what decides the flag.
+///
+/// It matters because `isError` is the only signal a client model gets. Reported as a success, a
+/// refusal — `desktop_unavailable`, `approval_store`, a read the backend could not serve — reads
+/// as "the tool ran, and this is the answer", and the model builds on a result that never
+/// happened.
+fn is_error_payload(text: &str) -> bool {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| value.get("error").cloned())
+        .is_some()
+}
+
 /// The MCP server: a backend, the shared approval queue, a clock, and the plan entitlement
 /// provider (issue #97). The provider is a closure (not a snapshot) because a trial can expire
 /// while the stdio session is running — it is consulted on every `tools/call`.
@@ -157,9 +171,10 @@ impl<B: MemoryBackend> McpServer<B> {
                 return error(id, -32602, "missing approval_id");
             };
             let text = self.poll_action(approval_id);
+            let failed = is_error_payload(&text);
             return result(
                 id,
-                json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+                json!({ "content": [{ "type": "text", "text": text }], "isError": failed }),
             );
         }
         let Some(tool) = Tool::from_wire(name) else {
@@ -276,9 +291,10 @@ impl<B: MemoryBackend> McpServer<B> {
         };
 
         // MCP tool results are content blocks; we return the tool's JSON as a text block.
+        let failed = is_error_payload(&text);
         result(
             id,
-            json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+            json!({ "content": [{ "type": "text", "text": text }], "isError": failed }),
         )
     }
 
@@ -688,5 +704,27 @@ mod tests {
         assert_eq!(lines.len(), 2, "got: {text}");
         assert!(lines[0].contains("\"protocolVersion\""));
         assert!(lines[1].contains("\"tools\""));
+    }
+
+    #[test]
+    fn an_error_payload_is_reported_as_an_error() {
+        assert!(is_error_payload(r#"{"error":"desktop_unavailable"}"#));
+        assert!(is_error_payload(
+            r#"{"error":"no_approval_surface","detail":"start SHOGUN"}"#
+        ));
+    }
+
+    #[test]
+    fn an_answer_is_not_reported_as_an_error() {
+        assert!(!is_error_payload(r#"{"results":[]}"#));
+        assert!(!is_error_payload(r#"{"status":"pending","approval_id":7}"#));
+        // A read whose own content mentions the word is still an answer.
+        assert!(!is_error_payload(r#"{"results":[{"text":"error budget"}]}"#));
+    }
+
+    #[test]
+    fn a_non_json_body_is_not_guessed_at() {
+        assert!(!is_error_payload("not json"));
+        assert!(!is_error_payload(""));
     }
 }
