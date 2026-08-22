@@ -415,6 +415,7 @@ export function App(): JSX.Element {
   /// anything above it is history rather than part of what you're doing now.
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [requestedSettingsSection, setRequestedSettingsSection] = useState<SettingsSectionId>("general");
   /** Idle chin: reading/app/due vs quiet welded hide. Persisted in app data (Rust). */
   const [showStatusInNotch, setShowStatusInNotch] = useState(true);
   /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
@@ -570,6 +571,15 @@ export function App(): JSX.Element {
       listen("summon", () => {
         setOpen(true);
         sizeForViewRef.current({ open: true });
+      }),
+    );
+    offs.push(
+      listen<{ section?: SettingsSectionId }>("meeting_open_settings", (event) => {
+        setRequestedSettingsSection(event.payload.section ?? "voice");
+        setOpen(true);
+        setShowSettings(true);
+        setShowHub(false);
+        sizeForViewRef.current({ open: true, settings: true, hub: false });
       }),
     );
     offs.push(
@@ -1427,6 +1437,7 @@ export function App(): JSX.Element {
         <div className="panel__body">
         {showSettings ? (
           <Settings
+            initialSection={requestedSettingsSection}
             appearance={appearance}
             setAppearance={setAppearance}
             showStatusInNotch={showStatusInNotch}
@@ -5449,6 +5460,7 @@ function SettingsSlot({
 }
 
 function Settings(props: {
+  initialSection: SettingsSectionId;
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
   showStatusInNotch: boolean;
@@ -5461,6 +5473,7 @@ function Settings(props: {
   onCleared: () => void;
 }): JSX.Element {
   const {
+    initialSection,
     appearance,
     setAppearance,
     showStatusInNotch,
@@ -5471,13 +5484,14 @@ function Settings(props: {
     onDone,
     onCleared,
   } = props;
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const settingsContentRef = useRef<HTMLElement>(null);
   const activeSectionMeta = SETTINGS_SECTIONS.find((section) => section.id === activeSection) ?? SETTINGS_SECTIONS[0];
   const selectSection = (section: SettingsSectionId): void => {
     setActiveSection(section);
     settingsContentRef.current?.scrollTo({ top: 0, behavior: "auto" });
   };
+  useEffect(() => setActiveSection(initialSection), [initialSection]);
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);

@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import notesIcon from "./assets/meeting/notes.svg";
@@ -18,7 +18,7 @@ import { DragHandle6Dot } from "./DragHandle6Dot";
 import { ResizeCornerHandle } from "./ResizeCornerHandle";
 import { t } from "./strings";
 import { uiLog } from "./uiLog";
-import { IconCopy } from "./utilityIcons";
+import { IconCopy, IconSettings, IconSliders } from "./utilityIcons";
 import {
   buildTimeline,
   clock,
@@ -122,12 +122,13 @@ function defaultPanelSize(surface: MeetingSurface): { w: number; h: number } {
 
 /** Host pill — match Rust `PILL_SIZE` / `PILL_WITH_MENU_SIZE`. */
 const HOST_PILL_SIZE = { w: 320, h: 100 } as const;
-/** Tall enough for mode list + one-way/two-way lang row under More. */
-const HOST_PILL_WITH_MENU_SIZE = { w: 320, h: 280 } as const;
+/** Full quick-settings card opens upward above the host pill. */
+const HOST_PILL_WITH_MENU_SIZE = { w: 360, h: 430 } as const;
 
 const MODES: MeetingMode[] = ["transcription", "one_way", "two_way"];
 const LANGS: MeetingLanguage[] = ["auto", "english", "japanese"];
 const ONE_WAY_TARGET_LANGS: MeetingLanguage[] = ["english", "japanese"];
+type MorePage = "root" | "language";
 
 export function MeetingOverlay(): JSX.Element | null {
   const surface = meetingSurfaceFromLabel();
@@ -156,13 +157,19 @@ export function MeetingOverlay(): JSX.Element | null {
   const liveLines = live.lines;
   const liveInterims = live.interims;
   const [settings, setSettings] = useState<MeetingSettings>({
+    microphone: null,
     meeting_mode: "transcription",
+    language: "english",
     source_lang: "auto",
     target_lang: "japanese",
     my_lang: "english",
     other_lang: "japanese",
   });
   const [modeOpen, setModeOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [morePage, setMorePage] = useState<MorePage>("root");
+  const [stealthMode, setStealthMode] = useState(false);
+  const [barOpacity, setBarOpacity] = useState(100);
   const [langOpen, setLangOpen] = useState<"source" | "target" | "my" | "other" | null>(null);
   const [translateKeyIssue, setTranslateKeyIssue] = useState<"missing" | "invalid" | null>(null);
   const [copyFlash, setCopyFlash] = useState(false);
@@ -493,10 +500,10 @@ export function MeetingOverlay(): JSX.Element | null {
   // Grow host window while the bar mode menu is open (menu sits above the pill).
   useEffect(() => {
     if (!isHost || view?.state !== "recording") return;
-    const menu = modeOpen;
+    const menu = moreOpen;
     const size = menu ? HOST_PILL_WITH_MENU_SIZE : HOST_PILL_SIZE;
     call("meeting_set_overlay_size", { width: size.w, height: size.h, label: "meeting" });
-  }, [isHost, view?.state, modeOpen, ccOn]);
+  }, [isHost, view?.state, moreOpen]);
 
   useEffect(() => {
     if (view?.state !== "recording") {
@@ -668,6 +675,22 @@ export function MeetingOverlay(): JSX.Element | null {
     setSettings((s) => ({ ...s, [field]: lang }));
     setLangOpen(null);
     call("set_meeting_langs", { [field]: lang });
+  };
+
+  const openVoiceSettings = (): void => {
+    setMoreOpen(false);
+    setMorePage("root");
+    void emit("meeting_open_settings", { section: "voice" }).catch(() => undefined);
+  };
+
+  const toggleStealth = (): void => {
+    const next = !stealthMode;
+    setStealthMode(next);
+    if (next) {
+      setCcOn(false);
+      setNotesOpen(false);
+      setChatOn(false);
+    }
   };
 
   if (view.state === "offered") {
@@ -1140,7 +1163,7 @@ export function MeetingOverlay(): JSX.Element | null {
           title={t.meetingCanvasDrag}
           onPointerDown={drag}
         />
-        <div className="ov__bar ov__nodrag" data-no-drag>
+        <div className="ov__bar ov__nodrag" data-no-drag style={{ opacity: barOpacity / 100 }}>
         <div className="ov__bar-cluster" role="toolbar" aria-label={t.meetingNotes}>
           <div className="ov__bar-slot">
             <button
@@ -1187,12 +1210,12 @@ export function MeetingOverlay(): JSX.Element | null {
           <div className="ov__bar-slot ov__bar-slot--more">
             <button
               type="button"
-              className={`ov__bar-btn${modeOpen ? " is-on" : ""}`}
-              aria-expanded={modeOpen}
+              className={`ov__bar-btn${moreOpen ? " is-on" : ""}`}
+              aria-expanded={moreOpen}
               aria-label={t.meetingMore}
               onClick={() => {
-                setModeOpen((open) => !open);
-                setLangOpen(null);
+                setMoreOpen((open) => !open);
+                setMorePage("root");
               }}
             >
               <img className="ov__bar-ico" src={moreIcon} alt="" width={20} height={20} draggable={false} />
@@ -1200,41 +1223,96 @@ export function MeetingOverlay(): JSX.Element | null {
             <span className="ov__bar-tip" role="tooltip">
               {t.meetingMore}
             </span>
-            {modeOpen ? (
-              <div className="ov__modemenu ov__modemenu--bar" role="listbox">
-                {MODES.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    role="option"
-                    aria-selected={m === settings.meeting_mode}
-                    className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
-                    onClick={() => setMode(m)}
-                  >
-                    {m === settings.meeting_mode ? (
-                      <span className="ov__mode-check" aria-hidden>
-                        ✓
-                      </span>
-                    ) : (
-                      <span className="ov__mode-check-spacer" aria-hidden />
-                    )}
-                    {modeLabel(m)}
-                  </button>
-                ))}
-                {settings.meeting_mode === "one_way" ? (
-                  <div className="ov__langrow ov__langrow--menu">
-                    {langPicker("source", "source_lang", settings.source_lang, LANGS)}
-                    <span className="ov__langarrow">{t.meetingLangArrow}</span>
-                    {langPicker("target", "target_lang", settings.target_lang, ONE_WAY_TARGET_LANGS)}
-                  </div>
-                ) : null}
-                {settings.meeting_mode === "two_way" ? (
-                  <div className="ov__langrow ov__langrow--menu">
-                    {langPicker("my", "my_lang", settings.my_lang, ONE_WAY_TARGET_LANGS)}
-                    <span className="ov__langarrow">{t.meetingLangSwap}</span>
-                    {langPicker("other", "other_lang", settings.other_lang, ONE_WAY_TARGET_LANGS)}
-                  </div>
-                ) : null}
+            {moreOpen ? (
+              <div className="ov__moremenu" role="dialog" aria-label={t.meetingMore}>
+                {morePage === "root" ? (
+                  <>
+                    <div className="ov__more-stealth">
+                      <IconSettings className="ov__more-icon" size={16} />
+                      <div className="ov__more-copy">
+                        <strong>{t.meetingMoreStealth}</strong>
+                        <span>{t.meetingMoreStealthHint}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className={`ov__more-switch${stealthMode ? " is-on" : ""}`}
+                        aria-pressed={stealthMode}
+                        aria-label={t.meetingMoreStealth}
+                        onClick={toggleStealth}
+                      >
+                        <span aria-hidden />
+                      </button>
+                    </div>
+                    <label className="ov__more-opacity">
+                      <span className="ov__more-label"><IconSliders className="ov__more-icon" size={16} />{t.meetingMoreOpacity}</span>
+                      <input
+                        type="range"
+                        min="35"
+                        max="100"
+                        value={barOpacity}
+                        aria-label={t.meetingMoreOpacity}
+                        onChange={(event) => setBarOpacity(Number(event.target.value))}
+                      />
+                    </label>
+                    <div className="ov__more-rule" />
+                    <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
+                      <IconSettings className="ov__more-icon" size={16} />
+                      <span>{t.meetingMoreDictionary}</span><b>›</b>
+                    </button>
+                    <button type="button" className="ov__more-row" onClick={() => setMorePage("language")}>
+                      <IconSettings className="ov__more-icon" size={16} />
+                      <span>{t.meetingMoreLanguage}</span><em>{modeLabel(settings.meeting_mode)}</em><b>›</b>
+                    </button>
+                    <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
+                      <IconSettings className="ov__more-icon" size={16} />
+                      <span>{t.meetingMoreShortcuts}</span><b>›</b>
+                    </button>
+                    <div className="ov__more-rule" />
+                    <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
+                      <IconSettings className="ov__more-icon" size={16} />
+                      <span>{t.meetingMoreMicrophone}</span><em>{settings.microphone ?? t.meetingMoreDefaultInput}</em><b>›</b>
+                    </button>
+                    <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
+                      <IconSettings className="ov__more-icon" size={16} />
+                      <span>{t.meetingMoreSystemAudio}</span><em>{t.meetingMoreAutomatic}</em><b>›</b>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="ov__more-back" onClick={() => setMorePage("root")}>
+                      ‹ {t.meetingMoreBack}
+                    </button>
+                    <div className="ov__more-title">{t.meetingMoreLanguage}</div>
+                    <div className="ov__more-modes" role="listbox">
+                      {MODES.map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          role="option"
+                          aria-selected={m === settings.meeting_mode}
+                          className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
+                          onClick={() => setMode(m)}
+                        >
+                          {modeLabel(m)}
+                        </button>
+                      ))}
+                    </div>
+                    {settings.meeting_mode === "one_way" ? (
+                      <div className="ov__langrow ov__langrow--menu">
+                        {langPicker("source", "source_lang", settings.source_lang, LANGS)}
+                        <span className="ov__langarrow">{t.meetingLangArrow}</span>
+                        {langPicker("target", "target_lang", settings.target_lang, ONE_WAY_TARGET_LANGS)}
+                      </div>
+                    ) : null}
+                    {settings.meeting_mode === "two_way" ? (
+                      <div className="ov__langrow ov__langrow--menu">
+                        {langPicker("my", "my_lang", settings.my_lang, ONE_WAY_TARGET_LANGS)}
+                        <span className="ov__langarrow">{t.meetingLangSwap}</span>
+                        {langPicker("other", "other_lang", settings.other_lang, ONE_WAY_TARGET_LANGS)}
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </div>
             ) : null}
           </div>

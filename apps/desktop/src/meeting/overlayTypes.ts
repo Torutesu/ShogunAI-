@@ -27,7 +27,9 @@ export interface MeetingTranscript {
 }
 
 export interface MeetingSettings {
+  microphone?: string | null;
   meeting_mode: MeetingMode;
+  language: MeetingLanguage;
   source_lang: MeetingLanguage;
   target_lang: MeetingLanguage;
   my_lang: MeetingLanguage;
