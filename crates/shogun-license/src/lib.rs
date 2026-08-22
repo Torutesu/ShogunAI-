@@ -48,13 +48,13 @@ const MS_PER_DAY: u64 = 24 * 60 * 60 * 1000;
 
 /// The Ed25519 public key of the licence API, base64 (raw 32 bytes), baked into release builds.
 ///
-/// Empty until the production key is generated — `scripts/gen-license-keypair.mjs` prints the
-/// value to paste here. While it is empty, [`public_key`] falls back to the
-/// `SHOGUN_LICENSE_PUBKEY` environment variable, which is how dev and CI run.
+/// Not a secret: it only verifies. Its private half was generated on the owner's machine by
+/// `scripts/gen-license-keypair.mjs` and lives solely in the licence API's environment, so it
+/// never passed through this repository or any build.
 ///
 /// **Rotation**: ship a build carrying the new key BEFORE the API starts signing with it, or
 /// every installed Mac drops into its offline-grace window on the next verification.
-pub const EMBEDDED_PUBLIC_KEY_B64: &str = "";
+pub const EMBEDDED_PUBLIC_KEY_B64: &str = "VeGhNqy8v8KfM1/flVxJIBzgDjbQ+U8g4NQBF9nDCr8=";
 
 /// Why a token was refused. Deliberately coarse: the UI says "couldn't verify", and a caller
 /// must never branch into "grant access" on any of these.
@@ -301,6 +301,35 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     const DEVICE: &str = "device-abc123";
+
+    /// A release build with no usable embedded key cannot verify anything, and the env override
+    /// is compiled out of release — so every installed Mac would fall straight into its
+    /// offline-grace window and then lock out, with nothing in the build to say why. The
+    /// constant shipped empty for exactly as long as nobody checked.
+    #[test]
+    fn the_embedded_public_key_is_a_real_ed25519_key() {
+        let decoded = decode_public_key(EMBEDDED_PUBLIC_KEY_B64)
+            .expect("EMBEDDED_PUBLIC_KEY_B64 must decode to 32 bytes");
+        assert_eq!(decoded.len(), 32);
+        // Decoding checks the length; this checks it is a point the verifier will accept, which
+        // 32 arbitrary bytes are not guaranteed to be.
+        ed25519_dalek::VerifyingKey::from_bytes(&decoded)
+            .expect("EMBEDDED_PUBLIC_KEY_B64 must be a valid Ed25519 public key");
+    }
+
+    /// The pair to the above: a build that verifies against a key we do not hold the private half
+    /// of grants nothing. The signature here is over the wrong key deliberately.
+    #[test]
+    fn the_embedded_key_rejects_a_token_signed_by_someone_else() {
+        let embedded = decode_public_key(EMBEDDED_PUBLIC_KEY_B64).expect("decodes");
+        let verifying = ed25519_dalek::VerifyingKey::from_bytes(&embedded).expect("valid key");
+        let body = b"not a real payload";
+        let sig = key().sign(body);
+        assert!(
+            verifying.verify_strict(body, &sig).is_err(),
+            "a token signed by the test key must not verify against the production key"
+        );
+    }
 
     fn key() -> SigningKey {
         // A fixed seed: the tests must be deterministic, and this key signs nothing real.
