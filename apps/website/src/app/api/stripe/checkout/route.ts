@@ -4,7 +4,14 @@ import { findCustomerByEmail, linkCustomer } from '@/db/billing-queries';
 import { HttpError, fail, readJsonObject } from '@/lib/http';
 import { isInterval, isPlanId, priceIdFor } from '@/lib/pricing';
 import { rateLimit } from '@/lib/rate-limit';
-import { appOrigin, automaticTaxEnabled, billingReady, checkoutTrialDays, stripe } from '@/lib/stripe';
+import {
+  appOrigin,
+  automaticTaxEnabled,
+  billingReady,
+  buildCheckoutParams,
+  checkoutTrialDays,
+  stripe,
+} from '@/lib/stripe';
 import { clientIp } from '@/lib/waitlist-auth';
 import { isValidClaimNonce } from '@/lib/license';
 import { isValidEmail } from '@/lib/referral';
@@ -52,41 +59,21 @@ export async function POST(req: Request) {
     // Reuse the Stripe customer when we already know this email, so a returning buyer does not
     // end up with two customers and two portals.
     const known = email ? await findCustomerByEmail(email) : null;
-    const trialDays = checkoutTrialDays();
-    const origin = appOrigin();
 
-    // Tax (STRIPE_AUTOMATIC_TAX). Stripe cannot compute a rate without a country, hence the
-    // required address; `tax_id_collection` lets an EU/UK business supply a VAT number, which
-    // moves that sale to reverse charge instead of us collecting. `customer_update` is only a
-    // legal parameter when the session names an existing customer — passing it alongside
-    // `customer_creation` is an API error, so it rides with `known`.
-    const tax = automaticTaxEnabled()
-      ? {
-          automatic_tax: { enabled: true },
-          billing_address_collection: 'required' as const,
-          tax_id_collection: { enabled: true },
-          ...(known ? { customer_update: { address: 'auto' as const, name: 'auto' as const } } : {}),
-        }
-      : {};
-
-    const session = await stripe().checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [{ price, quantity: 1 }],
-      ...(known
-        ? { customer: known.stripeCustomerId }
-        : { ...(email ? { customer_email: email } : {}), customer_creation: 'always' as const }),
-      ...tax,
-      allow_promotion_codes: true,
-      client_reference_id: email ?? undefined,
-      // The webhook reads these back to attach the subscription to the right plan and buyer.
-      metadata: { plan, interval, source, ...(claimNonce ? { claim_nonce: claimNonce } : {}) },
-      subscription_data: {
-        metadata: { plan, interval, source },
-        ...(trialDays > 0 ? { trial_period_days: trialDays } : {}),
-      },
-      success_url: `${origin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/#pricing`,
-    });
+    const session = await stripe().checkout.sessions.create(
+      buildCheckoutParams({
+        price,
+        plan,
+        interval,
+        source,
+        email,
+        claimNonce,
+        customerId: known?.stripeCustomerId ?? null,
+        trialDays: checkoutTrialDays(),
+        automaticTax: automaticTaxEnabled(),
+        origin: appOrigin(),
+      }),
+    );
 
     if (email && known === null && typeof session.customer === 'string') {
       // Best-effort early link; the webhook writes the authoritative one.
@@ -96,7 +83,15 @@ export async function POST(req: Request) {
     if (!session.url) return fail('server_error', { reason: 'no_checkout_url' });
     return NextResponse.json({ ok: true, url: session.url }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
-    console.error('checkout error:', e);
+    // Log the identifying fields on one line rather than the whole error: a Stripe rejection is
+    // an ops problem ("no such price", "unknown parameter"), and a log viewer that truncates the
+    // stack must still show which one it was. The buyer gets a bare `server_error` — a Stripe
+    // message can name internal parameters and price IDs.
+    const err = e as { type?: unknown; code?: unknown; param?: unknown; message?: unknown };
+    console.error(
+      `checkout error: type=${String(err.type)} code=${String(err.code)} ` +
+        `param=${String(err.param)} message=${String(err.message)}`,
+    );
     return fail('server_error');
   }
 }

@@ -22,7 +22,7 @@ import {
   signLicenseToken,
 } from '../src/lib/license.ts';
 import { PLANS, formatUsd, planForPriceId, priceIdFor, priceLine } from '../src/lib/pricing.ts';
-import { automaticTaxEnabled, billingReady } from '../src/lib/stripe.ts';
+import { automaticTaxEnabled, billingReady, buildCheckoutParams } from '../src/lib/stripe.ts';
 
 /**
  * Billing unit tests (issue #8). Everything here is the pure layer — no Stripe account, no DB,
@@ -114,6 +114,92 @@ test('automatic tax is opt-in, so an unconfigured Stripe account cannot break ch
   process.env.STRIPE_AUTOMATIC_TAX = '1';
   assert.equal(automaticTaxEnabled(), true);
   delete process.env.STRIPE_AUTOMATIC_TAX;
+});
+
+// ── checkout session params ───────────────────────────────────────────────────
+
+const checkoutInput = (over: Partial<Parameters<typeof buildCheckoutParams>[0]> = {}) => ({
+  price: 'price_pro_year',
+  plan: 'pro' as const,
+  interval: 'annual' as const,
+  source: 'app',
+  email: null,
+  claimNonce: null,
+  customerId: null,
+  trialDays: 0,
+  automaticTax: false,
+  origin: 'https://shogunaios.com',
+  ...over,
+});
+
+test('a subscription session never sends customer_creation', () => {
+  // Stripe rejects `customer_creation` outside payment/setup mode, and subscription mode creates
+  // the Customer regardless. Sending it 500s *every first-time purchase* — the guest path is the
+  // one nobody exercises in staging, because staging always has a customer already.
+  for (const over of [{}, { email: 'buyer@example.com' }, { customerId: 'cus_1' }]) {
+    const params = buildCheckoutParams(checkoutInput(over)) as Record<string, unknown>;
+    assert.equal(params.mode, 'subscription');
+    assert.ok(
+      !('customer_creation' in params),
+      `customer_creation is illegal in subscription mode (${JSON.stringify(over)})`,
+    );
+  }
+});
+
+test('customer_update only rides along when the session names a customer', () => {
+  // `customer_update` is an API error unless `customer` is set, so the guest + tax combination
+  // must not carry it.
+  const guest = buildCheckoutParams(checkoutInput({ automaticTax: true })) as Record<string, unknown>;
+  assert.ok(!('customer' in guest));
+  assert.ok(!('customer_update' in guest), 'no customer means customer_update is illegal');
+
+  const known = buildCheckoutParams(
+    checkoutInput({ automaticTax: true, customerId: 'cus_1' }),
+  ) as Record<string, unknown>;
+  assert.equal(known.customer, 'cus_1');
+  assert.deepEqual(known.customer_update, { address: 'auto', name: 'auto' });
+
+  const noTax = buildCheckoutParams(checkoutInput({ customerId: 'cus_1' })) as Record<string, unknown>;
+  assert.ok(!('customer_update' in noTax), 'without automatic tax there is nothing to update');
+});
+
+test('a known customer wins over customer_email, so a buyer keeps one portal', () => {
+  const params = buildCheckoutParams(
+    checkoutInput({ email: 'buyer@example.com', customerId: 'cus_1' }),
+  ) as Record<string, unknown>;
+  assert.equal(params.customer, 'cus_1');
+  assert.ok(!('customer_email' in params), 'customer and customer_email together is an API error');
+  assert.equal(params.client_reference_id, 'buyer@example.com');
+});
+
+test('the claim nonce rides in session metadata only when the buying Mac minted one', () => {
+  const withNonce = buildCheckoutParams(checkoutInput({ claimNonce: 'abc' }));
+  assert.equal(withNonce.metadata?.claim_nonce, 'abc');
+  // Never on the subscription: that object outlives the one-shot capability.
+  assert.ok(!('claim_nonce' in (withNonce.subscription_data?.metadata ?? {})));
+
+  const without = buildCheckoutParams(checkoutInput());
+  assert.ok(!('claim_nonce' in (without.metadata ?? {})));
+});
+
+test('the trial is a flag, and the return URLs are absolute', () => {
+  const none = buildCheckoutParams(checkoutInput());
+  assert.ok(!('trial_period_days' in (none.subscription_data ?? {})), '0 means charge immediately');
+
+  const trial = buildCheckoutParams(checkoutInput({ trialDays: 7 }));
+  assert.equal(trial.subscription_data?.trial_period_days, 7);
+
+  assert.equal(
+    trial.success_url,
+    'https://shogunaios.com/billing/success?session_id={CHECKOUT_SESSION_ID}',
+  );
+  assert.equal(trial.cancel_url, 'https://shogunaios.com/#pricing');
+});
+
+test('the price comes from the resolved catalog, never from the caller', () => {
+  setPrices();
+  const params = buildCheckoutParams(checkoutInput({ price: priceIdFor('standard', 'monthly')! }));
+  assert.deepEqual(params.line_items, [{ price: 'price_std_month', quantity: 1 }]);
 });
 
 // ── subscription mapping ──────────────────────────────────────────────────────
