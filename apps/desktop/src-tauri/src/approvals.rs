@@ -53,6 +53,15 @@ pub mod mac {
         /// `SHOGUN_COMPOSIO_USER_ID` env var when empty. Stored in policy JSON (not a secret).
         #[serde(default)]
         pub user_id: String,
+        /// Whether Gmail is currently connected. Gmail's Composio transport stores no per-service
+        /// token, and its API key, user id and consent all outlive a disconnect — so this flag is
+        /// what makes a disconnect durable. Inferring "connected" from credentials instead would
+        /// let a relaunch resume third-party egress the user had switched off.
+        ///
+        /// `serde(default)` means every `composio.json` already on disk reads as disconnected, so
+        /// upgrading auto-connects nobody.
+        #[serde(default)]
+        pub gmail_connected: bool,
     }
 
     impl Default for ComposioPolicy {
@@ -61,6 +70,7 @@ pub mod mac {
                 draft_stop: true,
                 consent_acknowledged: false,
                 user_id: String::new(),
+                gmail_connected: false,
             }
         }
     }
@@ -782,6 +792,15 @@ pub mod mac {
         let path = dir.join("composio.json");
         let json = serde_json::to_string_pretty(&policy).map_err(|e| e.to_string())?;
         std::fs::write(&path, json).map_err(|e| format!("save failed: {e}"))
+    }
+
+    /// Persist whether Gmail is connected, preserving every other field.
+    ///
+    /// The durable half of the connection for a service whose transport stores no token: what the
+    /// Keychain token set is for Calendar and Drive.
+    pub(crate) fn set_gmail_connected(app: &tauri::AppHandle, connected: bool) -> Result<(), String> {
+        let policy = load_composio_policy(app);
+        save_composio_policy(app, ComposioPolicy { gmail_connected: connected, ..policy })
     }
 
     /// Update the persisted Composio policy. Enforces the invariant that draft_stop may only be
