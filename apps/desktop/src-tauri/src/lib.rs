@@ -15,6 +15,7 @@ pub mod axcache;
 mod analytics;
 mod billing;
 mod capture_source;
+mod connect_offer;
 mod connectors;
 mod daily_summaries;
 pub mod display;

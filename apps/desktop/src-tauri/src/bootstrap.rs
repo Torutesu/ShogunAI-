@@ -109,6 +109,9 @@ pub fn run() {
             // in-panel Settings view (there is no separate settings window).
             fullui::mac::full_ui_view,
             connectors::mac::connectors_list,
+            connect_offer::mac::connect_offer_status,
+            connect_offer::mac::connect_offer_not_now,
+            connect_offer::mac::connect_offer_never,
             connectors::mac::connect_service,
             connectors::mac::disconnect_service,
             connectors::mac::fetch_on_demand,
@@ -581,6 +584,11 @@ fn setup_macos(app: &tauri::App) {
             install_connectors(app.handle(), None);
         }
     }
+
+    // "Connect this app" offer (#86): state only — ticks ride the meeting driver's 1s frontmost
+    // poll, which degrades to a no-op until this state (and ConnectorState, managed above in
+    // either branch) exists.
+    connect_offer::mac::install(app.handle());
 
     // --- 匿名プロダクト分析（PostHog, #61）---
     let analytics_handle = app.handle();

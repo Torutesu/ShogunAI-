@@ -501,6 +501,24 @@ pub mod mac {
         connect::transport_serves(svc, &extra)
     }
 
+    /// Whether `svc` is genuinely offerable-to-connect right now (issue #86): its wave is
+    /// released, the wired transport serves it, and the runtime says Disconnected — not
+    /// connected, not amber (reauth is the connections screen's job), not "Coming soon".
+    pub fn offerable_disconnected(app: &tauri::AppHandle, svc: Service, now: i64) -> bool {
+        if !transport_serves(svc) {
+            return false;
+        }
+        let Some(state) = app.try_state::<ConnectorState>() else {
+            return false;
+        };
+        let Ok(rt) = state.0.lock() else {
+            return false;
+        };
+        rt.statuses(now)
+            .into_iter()
+            .any(|row| row.service == svc && row.state == shogun_integrations::ConnUi::Disconnected)
+    }
+
     /// List every service's connection status for the connections screen.
     #[tauri::command]
     pub fn connectors_list(

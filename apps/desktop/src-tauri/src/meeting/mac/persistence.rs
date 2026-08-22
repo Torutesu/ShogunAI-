@@ -472,6 +472,10 @@ pub fn spawn_meeting_driver(app: tauri::AppHandle) -> std::thread::JoinHandle<()
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
         if let Some(front) = crate::display::frontmost_app() {
+            // Second consumer of this 1s frontmost tick: the connect-this-app offer (#86).
+            // One poll, two features — a poller of its own would double the per-second
+            // NSWorkspace wakeups for the same signal (idle-CPU budget, CLAUDE.md).
+            crate::connect_offer::mac::on_front(&app, &front.bundle_id);
             // FR-MT-02a: with the feature off, this loop must not pay the per-second
             // Accessibility round-trips (focused window title, browser URL) — on_focus's own
             // gate sits AFTER those reads, so the check has to happen here. The cheap

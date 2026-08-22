@@ -190,6 +190,10 @@ export const STRINGS = {
     connectionsUnavailable: "Not available yet",
     connect: "Connect",
     connecting: "Connecting…",
+    // "Connect this app" offer pill (#86)
+    connectOfferAsk: (service: string): string => `Connect ${service}?`,
+    connectOfferNo: "No",
+    connectOfferNotNow: "Not now",
     reconnect: "Reconnect",
     disconnect: "Disconnect",
     // AI coding-tool transcripts (opt-in source)

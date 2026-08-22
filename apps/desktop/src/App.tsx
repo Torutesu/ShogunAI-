@@ -13,7 +13,7 @@ import {
 } from "./daily";
 import { t, tf } from "./strings";
 import { AnalyticsToggle } from "./AnalyticsToggle";
-import { ConnectionsList } from "./connections";
+import { CONN_LABELS, ConnectionsList } from "./connections";
 import { comboChips, DEFAULT_BINDS } from "./keys";
 import {
   IconBrain,
@@ -80,6 +80,15 @@ interface MeetingView {
   paused?: boolean;
 }
 
+/** "Connect this app" offer (#86), pushed from Rust (connect_offer.rs) — `null` clears. The
+ *  webview only draws it; the gate, dismissals and connectedness all live Rust-side. */
+interface ConnectOfferView {
+  /** Stable service id (`gcal` / `slack` / …) — same key the connections screen uses. */
+  service: string;
+  /** The app that triggered the offer — what "Not now" declines. */
+  bundle_id: string;
+}
+
 /** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
 function clock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -134,6 +143,10 @@ interface LevelEvent {
 const VOICE_W_RESPONSE = 480;
 const VOICE_H_RESPONSE = 280;
 const VOICE_W_RECORD_COLLAPSED = 240;
+/** Collapsed window width while the connect-offer pill (#86) is showing. Must match the fixed
+ *  `.mpill--connect` width in meeting-pill.css — the pill paints every pixel of the window so
+ *  there is no transparent dead zone eating clicks. */
+const W_CONNECT_COLLAPSED = 380;
 const VOICE_LEVEL_STALE_MS = 1_200;
 const VOICE_ERROR_DISMISS_MS = 4_000;
 
@@ -524,10 +537,22 @@ export function App(): JSX.Element {
   }, [appearance]);
 
   const [meeting, setMeeting] = useState<MeetingView | null>(null);
+  // "Connect this app" offer (#86) — Rust-owned, push-driven like the meeting pill.
+  const [connectOffer, setConnectOffer] = useState<ConnectOfferView | null>(null);
+  // True once the first `connect_offer` event lands: the boot-time recovery read races the
+  // event stream, and a stale snapshot must never overwrite a fresher push (the emit-on-change
+  // contract would then never correct it).
+  const offerEventSeen = useRef(false);
   // The pill replaces the handle, so it needs its own ref for the collapsed-size measurement.
   const pillRef = useRef<HTMLDivElement>(null);
   const meetingRef = useRef<MeetingView | null>(null);
   meetingRef.current = meeting;
+  // What the chin is actually showing for #86 (null when the status-in-notch weld hides it) —
+  // read by the hover-expand guard, which lives in a once-registered listener.
+  const connectOfferShownRef = useRef<ConnectOfferView | null>(null);
+  useEffect(() => {
+    connectOfferShownRef.current = showStatusInNotch ? connectOffer : null;
+  }, [showStatusInNotch, connectOffer]);
 
   // Start at the open size and prove the webview is alive.
   useEffect(() => {
@@ -540,6 +565,19 @@ export function App(): JSX.Element {
     // has started (FR-MT-07). The first read covers a webview reload mid-meeting.
     offs.push(listen<MeetingView>("meeting", (e) => setMeeting(e.payload)));
     void invoke<MeetingView>("meeting_status").then(setMeeting).catch(() => undefined);
+    // Same push-driven contract for the connect offer; the recovery read covers a webview
+    // reload while an offer is standing, but yields to any event that beat it.
+    offs.push(
+      listen<ConnectOfferView | null>("connect_offer", (e) => {
+        offerEventSeen.current = true;
+        setConnectOffer(e.payload);
+      }),
+    );
+    void invoke<ConnectOfferView | null>("connect_offer_status")
+      .then((v) => {
+        if (!offerEventSeen.current) setConnectOffer(v);
+      })
+      .catch(() => undefined);
     // Boot conditions the app used to keep to itself (stderr only). Asked again on every expand
     // below, so granting Accessibility from System Settings clears the warning in place.
     void invoke<StartupHealth>("startup_health").then(setHealth).catch(() => undefined);
@@ -732,12 +770,17 @@ export function App(): JSX.Element {
           // Never fight a user who pinned the panel open, and never re-open one they just closed
           // by hand — the tracker doesn't know about either.
           if (!openRef.current) {
-            // Meeting chin owns Stop / Take Notes. expand() sets expanding/open and unmounts
-            // MeetingPill (showIdleFace=false) mid-click — hover looked like it worked, Stop never fired.
+            // A chin pill with buttons owns its clicks. expand() sets expanding/open and unmounts
+            // the pill (showIdleFace=false) mid-click — hover looked like it worked, Stop never
+            // fired. Same for the connect offer's No / Not now / Connect (#86).
             // Hover only: Expanded is a deliberate open (hotkey, real click), and swallowing it
             // here left the panel unreachable for the whole meeting.
             const m = meetingRef.current;
-            if (st === "hover" && m?.enabled && (m.state === "offered" || m.state === "recording")) {
+            if (
+              st === "hover" &&
+              (connectOfferShownRef.current !== null ||
+                (m?.enabled && (m.state === "offered" || m.state === "recording")))
+            ) {
               return;
             }
             expandRef.current();
@@ -1317,7 +1360,18 @@ export function App(): JSX.Element {
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
     const hiding = el.classList.contains("handle--hiding");
     const voiceActivity = el.querySelector(".vpill") !== null;
-    const notchW = voiceActivity ? VOICE_W_RECORD_COLLAPSED : hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    // The connect offer's three buttons don't fit the notch cutout — a fixed wider window,
+    // exactly like the voice pill's exception. Fixed, not measured: any measurement here runs
+    // while the viewport is still handle-sized, so flex would have already clamped the pill to
+    // the old width and the "natural" size is unobservable.
+    const connectPill = el.querySelector(".mpill--connect") !== null;
+    const notchW = voiceActivity
+      ? VOICE_W_RECORD_COLLAPSED
+      : connectPill
+        ? W_CONNECT_COLLAPSED
+        : hiding
+          ? W_HIDE
+          : W_HANDLE_FALLBACK;
     const minH = voiceActivity || hiding ? H_DEAD : H_HANDLE;
     void applyPanelSize(
       notchW,
@@ -1335,6 +1389,7 @@ export function App(): JSX.Element {
     meeting?.title,
     meeting?.elapsed_ms,
     meeting?.countdown_ms,
+    connectOffer?.service,
     voice?.phase,
     voice?.level,
     // The greeting swaps the handle's text (issue #10), so its width changes with it.
@@ -1374,6 +1429,17 @@ export function App(): JSX.Element {
   ) : voiceLive?.phase === "processing" ? (
     <div ref={pillRef}>
       <VoiceProcessingPill />
+    </div>
+  ) : connectOffer && showStatusInNotch ? (
+    <div ref={pillRef}>
+      <ConnectPill
+        // Keyed so `busy` never bleeds into a different offer that replaces this one mid-connect.
+        key={`${connectOffer.service}:${connectOffer.bundle_id}`}
+        offer={connectOffer}
+        // Clear only the offer this pill was answering — a stale resolution (failed OAuth
+        // minutes later) must not wipe a newer offer Rust has since pushed.
+        onDone={() => setConnectOffer((cur) => (cur === connectOffer ? null : cur))}
+      />
     </div>
   ) : (
     <button
@@ -2362,6 +2428,70 @@ function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
       >
         {t.meetingStop}
       </button>
+    </div>
+  );
+}
+
+/** "Connect this app" offer (#86): the frontmost app maps to a service SHOGUN can connect but
+ *  hasn't — a one-click connect from the chin, same pill shape as the meeting offer. Rust owns
+ *  the lifecycle (gate, dismissals, connectedness); the buttons only report the answer. */
+function ConnectPill({
+  offer,
+  onDone,
+}: {
+  offer: ConnectOfferView;
+  onDone: () => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const label = CONN_LABELS[offer.service] ?? offer.service;
+  return (
+    <div className="mpill mpill--connect">
+      <span className="mpill__title">{t.connectOfferAsk(label)}</span>
+      <span className="mpill__acts">
+        <button
+          type="button"
+          className="mpill__btn mpill__btn--quiet"
+          onClick={() => {
+            void invoke("connect_offer_never", { service: offer.service }).catch(() => undefined);
+            onDone();
+          }}
+        >
+          {t.connectOfferNo}
+        </button>
+        <button
+          type="button"
+          className="mpill__btn"
+          onClick={() => {
+            void invoke("connect_offer_not_now", { bundleId: offer.bundle_id }).catch(
+              () => undefined,
+            );
+            onDone();
+          }}
+        >
+          {t.connectOfferNotNow}
+        </button>
+        <button
+          type="button"
+          className="mpill__btn mpill__btn--go"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void invoke("connect_service", { service: offer.service })
+              .then(() => onDone())
+              .catch(() => {
+                // Failed connect (denied consent, missing prerequisite): stand down like "Not
+                // now" so Rust's view matches the pill being cleared; the connections screen in
+                // Settings keeps the actionable error as the retry path.
+                void invoke("connect_offer_not_now", { bundleId: offer.bundle_id }).catch(
+                  () => undefined,
+                );
+                onDone();
+              });
+          }}
+        >
+          {busy ? t.connecting : t.connect}
+        </button>
+      </span>
     </div>
   );
 }
