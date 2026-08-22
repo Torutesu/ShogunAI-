@@ -1,0 +1,44 @@
+<!-- Source of truth for the macOS app icon. The rasters (icon.icns / icon.png) are generated
+     from this file — see the regeneration command in apps/desktop/README.md.
+
+     The mark is the same folded-paper kabuto as apps/desktop/src/Logo.tsx and the marketing
+     site's Logo.tsx: one brand, one mark. If those change, this must change with them. Only the
+     left half is authored; the right is that mirrored, so the two sides cannot drift apart.
+
+     Layout follows Apple's macOS icon grid: a 1024 canvas with the rounded-square body inset to
+     824x824 (100pt margin) and a 185 corner radius, so the icon sits at the same optical size as
+     system apps in the Dock and Finder.
+
+     The body is white, as the mark is presented. On a dark Dock that reads as a bright tile; on a
+     light one the hairline edge keeps it from dissolving into the background. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"
+     role="img" aria-label="ShogunAI">
+  <defs>
+    <!-- Barely a gradient: enough to keep a large white square from looking like a hole cut in the
+         Dock, not enough to read as a tint. -->
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F2F4F8"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#body)"/>
+    <!-- Hairline edge: without it a white tile has no boundary against a light desktop. -->
+    <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" ry="184.5"
+          fill="none" stroke="#0B1220" stroke-opacity="0.10" stroke-width="1"/>
+  </g>
+
+  <!-- Mark: the 957x614 artwork scaled to 620 wide (0.6479) and centred on the body.
+       x: (1024 − 620) / 2 = 202.   y: (1024 − 620 × 614/957) / 2 = (1024 − 397.7) / 2 = 313.1 -->
+  <g transform="translate(202 313.1) scale(0.6479)" fill="#004CFC">
+    <path d="M296 254 L469 0 L469 525 Z"/>
+    <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+    <path d="M62 613 L171 413 L331 493 Z"/>
+    <g transform="translate(957,0) scale(-1,1)">
+      <path d="M296 254 L469 0 L469 525 Z"/>
+      <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+      <path d="M62 613 L171 413 L331 493 Z"/>
+    </g>
+  </g>
+</svg>

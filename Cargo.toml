@@ -1,7 +1,9 @@
 # SHOGUN Cargo workspace (Phase 0 spike).
 # Integrated at the monorepo root alongside the pnpm workspace (docs/requirements-v1.0.md ADR-006).
 # `crates/spike-harness` is the only asset carried into the real implementation (spec §2.1).
-# `apps/desktop/src-tauri` is the throwaway spike shell and only builds on macOS/arm64.
+# `apps/desktop/src-tauri` is the macOS/arm64 product shell (Linux CI excludes it).
+# `apps/shell/src-tauri` is the Windows/Linux windowed shell (Linux CI excludes it: needs WebKitGTK).
+# `crates/shogun-platform` is the PC OS boundary (paths + secrets) and *is* compiled on Linux CI.
 [workspace]
 resolver = "2"
 members = [
@@ -15,7 +17,9 @@ members = [
     "crates/shogun-integrations",
     "crates/shogun-cli",
     "crates/spike-harness",
+    "crates/shogun-platform",
     "apps/desktop/src-tauri",
+    "apps/shell/src-tauri",
 ]
 
 [workspace.package]

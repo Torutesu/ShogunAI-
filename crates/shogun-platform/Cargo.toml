@@ -1,0 +1,24 @@
+[package]
+name = "shogun-platform"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "OS adapters for the Windows/Linux shell: app-data paths and the secret locker. No capture, no DB, no HTTP."
+
+# Kept free of shogun-core / sqlcipher / reqwest so Linux CI and MSVC can compile it without
+# perl/openssl. The macOS app keeps using Keychain via security-framework; this crate is the
+# PC equivalent of that boundary (invariant 7).
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+] }
+
+[lints]
+workspace = true
