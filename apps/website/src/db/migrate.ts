@@ -130,8 +130,14 @@ async function main() {
       created_at             timestamptz NOT NULL DEFAULT now()
     )
   `;
+  // Additive: the claim capability that lets a Mac fetch its own key. Rollback =
+  // `ALTER TABLE licenses DROP COLUMN claim_nonce_hash, DROP COLUMN claim_expires_at;` — the
+  // manual key-entry path keeps working without them.
+  await sql`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS claim_nonce_hash text`;
+  await sql`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz`;
   await sql`CREATE INDEX IF NOT EXISTS licenses_subscription_idx ON licenses (stripe_subscription_id)`;
   await sql`CREATE INDEX IF NOT EXISTS licenses_customer_idx     ON licenses (stripe_customer_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS licenses_claim_idx        ON licenses (claim_nonce_hash)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS stripe_events (

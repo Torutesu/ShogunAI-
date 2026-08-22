@@ -169,11 +169,20 @@ export const licenses = pgTable(
     /** Distinct devices seen — the seat-abuse signal, without storing a device list. */
     deviceCount: integer('device_count').notNull().default(0),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    /**
+     * SHA-256 of the one-shot claim nonce the buying Mac minted before Checkout, so it can pull
+     * this key down itself instead of the human transcribing it. Cleared the moment it is used —
+     * a NULL here means "nothing to claim", which is also the state of every licence bought
+     * before this existed.
+     */
+    claimNonceHash: text('claim_nonce_hash'),
+    claimExpiresAt: timestamp('claim_expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('licenses_subscription_idx').on(t.stripeSubscriptionId),
     index('licenses_customer_idx').on(t.stripeCustomerId),
+    index('licenses_claim_idx').on(t.claimNonceHash),
   ],
 );
 

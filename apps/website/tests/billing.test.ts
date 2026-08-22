@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, verify as cryptoVerify } from 'node:crypto';
 import { test } from 'node:test';
 
 import {
@@ -10,15 +10,19 @@ import {
   type StripeSubscriptionLike,
 } from '../src/lib/billing.ts';
 import {
+  CLAIM_TTL_MS,
   buildTokenPayload,
   canonicalLicenseKey,
+  claimNonceHash,
   generateLicenseKey,
+  isValidClaimNonce,
   isValidDeviceId,
   isValidLicenseKey,
   licenseKeyFingerprint,
   signLicenseToken,
 } from '../src/lib/license.ts';
 import { PLANS, formatUsd, planForPriceId, priceIdFor, priceLine } from '../src/lib/pricing.ts';
+import { automaticTaxEnabled, billingReady } from '../src/lib/stripe.ts';
 
 /**
  * Billing unit tests (issue #8). Everything here is the pure layer — no Stripe account, no DB,
@@ -73,6 +77,43 @@ test('an unconfigured price is null, not a fallback', () => {
   delete process.env.STRIPE_PRICE_PRO_MONTHLY;
   assert.equal(priceIdFor('pro', 'monthly'), null);
   setPrices();
+});
+
+// ── configuration gate ────────────────────────────────────────────────────────
+
+test('billing stays closed until every purchasable combination has a price', () => {
+  // The desktop panel offers standard/pro x annual/monthly. A gate that only checked the annual
+  // pair let a buyer pick monthly and get a 503 while annual quietly worked.
+  process.env.STRIPE_SECRET_KEY = 'sk_test_x';
+  setPrices();
+  assert.equal(billingReady(), true);
+
+  for (const missing of [
+    'STRIPE_PRICE_STANDARD_ANNUAL',
+    'STRIPE_PRICE_STANDARD_MONTHLY',
+    'STRIPE_PRICE_PRO_ANNUAL',
+    'STRIPE_PRICE_PRO_MONTHLY',
+  ]) {
+    const saved = process.env[missing];
+    delete process.env[missing];
+    assert.equal(billingReady(), false, `${missing} missing must close billing`);
+    process.env[missing] = saved;
+  }
+
+  delete process.env.STRIPE_SECRET_KEY;
+  assert.equal(billingReady(), false, 'no secret key must close billing');
+});
+
+test('automatic tax is opt-in, so an unconfigured Stripe account cannot break checkout', () => {
+  delete process.env.STRIPE_AUTOMATIC_TAX;
+  assert.equal(automaticTaxEnabled(), false);
+  process.env.STRIPE_AUTOMATIC_TAX = '0';
+  assert.equal(automaticTaxEnabled(), false);
+  process.env.STRIPE_AUTOMATIC_TAX = 'true';
+  assert.equal(automaticTaxEnabled(), false, 'only an explicit 1 turns it on');
+  process.env.STRIPE_AUTOMATIC_TAX = '1';
+  assert.equal(automaticTaxEnabled(), true);
+  delete process.env.STRIPE_AUTOMATIC_TAX;
 });
 
 // ── subscription mapping ──────────────────────────────────────────────────────
@@ -243,4 +284,44 @@ test('the token carries the plan gate and nothing about the person', () => {
   ]);
   assert.ok(payload.exp > payload.iat, 'a token must expire');
   assert.equal(payload.grace_days, 14);
+});
+
+// ── claim nonces ──────────────────────────────────────────────────────────────
+
+test('a claim nonce must be long and opaque, so it cannot be guessed or smuggled', () => {
+  const good = randomBytes(32).toString('base64url');
+  assert.equal(isValidClaimNonce(good), true);
+  assert.equal(good.length >= 32, true, 'a 256-bit nonce clears the floor');
+
+  for (const bad of [
+    '',
+    'short',
+    'a'.repeat(31),
+    'a'.repeat(129),
+    `${'a'.repeat(31)}/`, // not URL-safe: would have to be escaped into Stripe metadata
+    `${'a'.repeat(31)}+`,
+    `${'a'.repeat(31)} `,
+    'a'.repeat(20) + '\n' + 'a'.repeat(20),
+    null,
+    undefined,
+    12345,
+    { toString: () => 'a'.repeat(40) },
+  ]) {
+    assert.equal(isValidClaimNonce(bad), false, `rejects ${JSON.stringify(String(bad))}`);
+  }
+});
+
+test('what we store is the hash, never the nonce itself', () => {
+  const nonce = randomBytes(32).toString('base64url');
+  const hash = claimNonceHash(nonce);
+
+  assert.equal(/^[0-9a-f]{64}$/.test(hash), true, 'sha-256 hex');
+  assert.equal(hash.includes(nonce), false, 'the capability is not recoverable from the row');
+  assert.equal(claimNonceHash(nonce), hash, 'stable, so lookup works');
+  assert.notEqual(claimNonceHash(randomBytes(32).toString('base64url')), hash);
+});
+
+test('the claim window is bounded — an abandoned checkout is not a standing capability', () => {
+  assert.equal(CLAIM_TTL_MS > 0, true);
+  assert.equal(CLAIM_TTL_MS <= 24 * 3600 * 1000, true, 'hours, not days');
 });

@@ -9,7 +9,13 @@ import {
   upsertSubscription,
 } from '@/db/billing-queries';
 import { toSubscriptionRecord, type StripeSubscriptionLike } from '@/lib/billing';
-import { generateLicenseKey, licenseKeyFingerprint } from '@/lib/license';
+import {
+  CLAIM_TTL_MS,
+  claimNonceHash,
+  generateLicenseKey,
+  isValidClaimNonce,
+  licenseKeyFingerprint,
+} from '@/lib/license';
 import { stripe, stripeSecretKey, webhookSecret } from '@/lib/stripe';
 
 export const runtime = 'nodejs';
@@ -59,11 +65,19 @@ async function onCheckoutCompleted(session: Stripe.Checkout.Session): Promise<vo
   await syncSubscription(subId);
   if (email) await linkCustomer(email, customerId);
 
+  // Carry the buying Mac's claim capability onto the licence, hashed. Sessions with no nonce
+  // (the LP, or an older app) simply have nothing to claim and fall back to the shown key.
+  const nonce = session.metadata?.claim_nonce;
+  const claim = isValidClaimNonce(nonce)
+    ? { claimNonceHash: claimNonceHash(nonce), claimExpiresAt: new Date(Date.now() + CLAIM_TTL_MS) }
+    : {};
+
   const license = await ensureLicense({
     licenseKey: generateLicenseKey(),
     stripeCustomerId: customerId,
     stripeSubscriptionId: subId,
     email,
+    ...claim,
   });
 
   // Stash the licence id on the Stripe objects so support can go from a Stripe dashboard row to

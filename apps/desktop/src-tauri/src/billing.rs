@@ -30,7 +30,7 @@ pub mod mac {
     use shogun_mcp::plan_source::{
         billing_state_of, parse_billing_snapshot, serialize_billing_snapshot, BillingSnapshot,
     };
-    use tauri::{AppHandle, Manager};
+    use tauri::{AppHandle, Emitter, Manager};
 
     /// Keychain account holding the licence key. The key is the ONLY billing secret on the device.
     const LICENSE_KEY_ACCOUNT: &str = "license-key";
@@ -138,7 +138,9 @@ pub mod mac {
 
     /// Display-only billing view for the settings panel. Plan gating is decided in the Rust core
     /// (CLAUDE.md: プラン判定はRustコア側で行う); this only describes it.
-    #[derive(serde::Serialize, Default)]
+    // `Clone` because the claim poll emits this view to the settings panel, and Tauri's
+    // `Emitter::emit` takes `Serialize + Clone`.
+    #[derive(Clone, serde::Serialize, Default)]
     pub struct BillingView {
         /// A licence key is stored on this Mac.
         pub activated: bool,
@@ -355,20 +357,29 @@ pub mod mac {
         if key.is_empty() {
             return view(&app, Some("enter your licence key".into()));
         }
-        match check(&app, &key) {
+        activate_with_key(&app, &key)
+    }
+
+    /// Verify a key, then store it — shared by the manual entry field and the automatic claim.
+    ///
+    /// Verification happens **before** anything is written, so a key for a cancelled subscription
+    /// (or a typo, from the manual path) leaves whatever was already on this Mac exactly as it
+    /// was. The key reaches the Keychain only after the server has accepted it.
+    fn activate_with_key(app: &AppHandle, key: &str) -> BillingView {
+        match check(app, key) {
             Ok(Outcome::Entitled(snap)) => {
                 if let Err(e) =
                     keychain_store::set_generic_secret(LICENSE_KEY_ACCOUNT, key.as_bytes())
                 {
-                    return view(&app, Some(format!("could not store the licence: {e}")));
+                    return view(app, Some(format!("could not store the licence: {e}")));
                 }
-                match write_snapshot(&app, &snap) {
-                    Ok(()) => view(&app, None),
-                    Err(e) => view(&app, Some(e)),
+                match write_snapshot(app, &snap) {
+                    Ok(()) => view(app, None),
+                    Err(e) => view(app, Some(e)),
                 }
             }
-            Ok(other) => view(&app, Some(other.message())),
-            Err(e) => view(&app, Some(e)),
+            Ok(other) => view(app, Some(other.message())),
+            Err(e) => view(app, Some(e)),
         }
     }
 
@@ -404,10 +415,107 @@ pub mod mac {
         app: AppHandle,
     ) -> Result<String, String> {
         record_billing_egress(&app, "stripe_checkout");
-        let url = license_client::checkout_url(&api_origin(), &plan, &interval)
-            .map_err(|e| e.message())?;
+        let nonce = mint_claim_nonce();
+        let url = license_client::checkout_url(
+            &api_origin(),
+            &plan,
+            &interval,
+            nonce.as_deref(),
+        )
+        .map_err(|e| e.message())?;
         open_in_browser(&url)?;
+        if let Some(nonce) = nonce {
+            spawn_claim_poll(app, nonce);
+        }
         Ok(url)
+    }
+
+    /// 256 bits of CSPRNG, base64url — the capability that lets this Mac pull down the licence it
+    /// is about to buy.
+    ///
+    /// It lives in this process and nowhere else: not `billing.json`, not the Keychain, not a log.
+    /// Whoever holds it can fetch the key once, so the cheapest way to keep it safe is to never
+    /// give it a resting place. The cost is that quitting mid-purchase forfeits the automatic
+    /// path — the buyer falls back to pasting the key from the success page, which is exactly the
+    /// flow that exists today.
+    ///
+    /// A failure to draw randomness returns `None` rather than a weak nonce: Checkout then runs
+    /// without a claim, which is a worse purchase experience and not a weaker one.
+    fn mint_claim_nonce() -> Option<String> {
+        let mut bytes = [0u8; 32];
+        if getrandom::getrandom(&mut bytes).is_err() {
+            eprintln!("[billing] no CSPRNG for a claim nonce — falling back to manual activation");
+            return None;
+        }
+        Some(base64_url_encode(&bytes))
+    }
+
+    /// base64url without padding, matching what the licence API accepts (`[A-Za-z0-9_-]{32,128}`).
+    fn base64_url_encode(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let b0 = u32::from(chunk[0]);
+            let b1 = chunk.get(1).copied().map_or(0, u32::from);
+            let b2 = chunk.get(2).copied().map_or(0, u32::from);
+            let n = (b0 << 16) | (b1 << 8) | b2;
+            for i in 0..chunk.len() + 1 {
+                let idx = ((n >> (18 - 6 * i)) & 0x3F) as usize;
+                out.push(ALPHABET[idx] as char);
+            }
+        }
+        out
+    }
+
+    /// How long to keep asking for the licence after Checkout opens, and how often.
+    ///
+    /// Long enough to cover finding a card and a 3-D Secure round trip; the server's own claim
+    /// window is what actually bounds the capability. Five seconds between polls keeps this well
+    /// inside the licence API's per-IP budget.
+    const CLAIM_POLL_INTERVAL_SECS: u64 = 5;
+    const CLAIM_POLL_DEADLINE_SECS: u64 = 15 * 60;
+
+    /// Watch for the licence the buyer just paid for and activate this Mac with it.
+    ///
+    /// Runs on its own thread and stays silent on failure: the manual key field is still on
+    /// screen, so a claim that never lands costs the buyer a paste, not their purchase
+    /// (CLAUDE.md エラー時挙動 — never interrupt the user's work with a modal).
+    fn spawn_claim_poll(app: AppHandle, nonce: String) {
+        std::thread::spawn(move || {
+            let origin = api_origin();
+            // One row for the whole poll, not one per attempt: the ledger records that this Mac
+            // talked to the licence API, and a row every five seconds would bury the screen it
+            // is meant to inform. Like the rest of the billing lane the request carries no
+            // capture or memory content (§7.7).
+            record_billing_egress(&app, "license_claim");
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_secs(CLAIM_POLL_DEADLINE_SECS);
+
+            while std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_secs(CLAIM_POLL_INTERVAL_SECS));
+
+                match license_client::claim_license(&origin, &nonce) {
+                    Ok(Some(key)) => {
+                        let v = activate_with_key(&app, &key);
+                        if let Some(error) = &v.error {
+                            // Never the key, never the nonce — only why activation was refused.
+                            eprintln!("[billing] claimed licence did not activate: {error}");
+                        } else {
+                            eprintln!("[billing] licence claimed and activated");
+                        }
+                        // The panel is not polling; tell it the plan may have changed.
+                        let _ = app.emit("billing-changed", v);
+                        return;
+                    }
+                    // Not yet, or a nonce the server does not recognise — they look alike on
+                    // purpose. Keep waiting; the deadline is what ends this.
+                    Ok(None) => {}
+                    Err(e) => eprintln!("[billing] claim poll: {}", e.message()),
+                }
+            }
+            eprintln!("[billing] claim window closed — manual activation still available");
+        });
     }
 
     /// Open the Stripe Customer Portal — cancellation, plan changes and card updates all live

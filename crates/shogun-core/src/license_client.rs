@@ -138,11 +138,50 @@ pub fn verify(
 /// The app never holds a Stripe Price ID — it names the plan and the server picks the price
 /// (issue #8 セキュリティ). The returned URL is Stripe-hosted and opens in the system browser, so
 /// no card data ever touches the app (FR-BIL-07).
-pub fn checkout_url(origin: &str, plan: &str, interval: &str) -> Result<String, VerifyError> {
+pub fn checkout_url(
+    origin: &str,
+    plan: &str,
+    interval: &str,
+    claim_nonce: Option<&str>,
+) -> Result<String, VerifyError> {
+    let mut body = serde_json::json!({ "plan": plan, "interval": interval, "source": "app" });
+    if let Some(nonce) = claim_nonce {
+        body["claim_nonce"] = serde_json::Value::String(nonce.to_string());
+    }
     post_for_url(
         &format!("{}/api/stripe/checkout", origin.trim_end_matches('/')),
-        &serde_json::json!({ "plan": plan, "interval": interval, "source": "app" }),
+        &body,
     )
+}
+
+/// Collect the licence this Mac just paid for, using the claim nonce it sent to Checkout.
+///
+/// `Ok(None)` means "not yet" — the webhook may not have landed, and the server deliberately
+/// answers the same way for a nonce it does not recognise, so there is nothing more to learn from
+/// a miss than "keep waiting". The caller polls until its own deadline and then falls back to
+/// manual entry.
+///
+/// This is what keeps a Keychain-grade secret off the buyer's screen: without it the key has to
+/// be printed on the success page and retyped into Settings.
+pub fn claim_license(origin: &str, nonce: &str) -> Result<Option<String>, VerifyError> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("shogun/1.0")
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| VerifyError::Network(e.to_string()))?;
+    let resp = client
+        .post(format!("{}/api/license/claim", origin.trim_end_matches('/')))
+        .json(&serde_json::json!({ "nonce": nonce }))
+        .send()
+        .map_err(|e| VerifyError::Network(e.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(VerifyError::Server(status.as_u16().to_string()));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| VerifyError::BadResponse(e.to_string()))?;
+    parse_claim_response(&body)
 }
 
 /// Ask the backend for a Stripe Customer Portal URL for this licence.
@@ -187,6 +226,27 @@ pub fn parse_url_response(body: &serde_json::Value) -> Result<String, VerifyErro
         .filter(|u| !u.trim().is_empty())
         .map(str::to_string)
         .ok_or_else(|| VerifyError::BadResponse("no url".to_string()))
+}
+
+/// Pure parser for the `{ ok, license_key }` / `{ ok, pending }` claim bodies.
+///
+/// A body carrying neither is treated as pending rather than as an error: the polling caller has
+/// a deadline of its own, and turning an unexpected shape into a hard failure would drop a buyer
+/// into manual entry over a field we simply did not recognise.
+pub fn parse_claim_response(body: &serde_json::Value) -> Result<Option<String>, VerifyError> {
+    if body.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        let err = body
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        return Err(VerifyError::Server(err.to_string()));
+    }
+    Ok(body
+        .get("license_key")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(str::to_string))
 }
 
 /// Pure parser for the verification body — separated so it is testable without a server.
@@ -282,6 +342,33 @@ mod tests {
         assert_eq!(
             parse_url_response(&serde_json::json!({ "ok": false, "error": "billing_not_configured" })),
             Err(VerifyError::Server("billing_not_configured".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_claim_answer_is_the_key_or_keep_waiting() {
+        assert_eq!(
+            parse_claim_response(&serde_json::json!({ "ok": true, "license_key": "shogun-AAAA" })),
+            Ok(Some("shogun-AAAA".to_string()))
+        );
+        // Pending, unknown nonce, already redeemed and expired are one answer by design.
+        assert_eq!(
+            parse_claim_response(&serde_json::json!({ "ok": true, "pending": true })),
+            Ok(None)
+        );
+        assert_eq!(
+            parse_claim_response(&serde_json::json!({ "ok": true, "license_key": "   " })),
+            Ok(None),
+            "a blank key is not a key"
+        );
+        assert_eq!(
+            parse_claim_response(&serde_json::json!({ "ok": true })),
+            Ok(None),
+            "an unrecognised shape keeps the caller waiting rather than failing the purchase"
+        );
+        assert_eq!(
+            parse_claim_response(&serde_json::json!({ "ok": false, "error": "rate_limited" })),
+            Err(VerifyError::Server("rate_limited".to_string()))
         );
     }
 
