@@ -17,12 +17,14 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       // Separate documents, not separate apps: the notch panel (index), the Full UI window
-      // (spec §D), and the first-run Accessibility guide (onboarding.html, Issue #46). They share
-      // styles.css and strings.ts, so the split is only at the entry.
+      // (spec §D), the first-run Accessibility guide (onboarding.html, Issue #46), and the launch
+      // window (splash.html). They share styles.css and strings.ts, so the split is only at the
+      // entry.
       input: {
         index: resolve(__dirname, "index.html"),
         fullui: resolve(__dirname, "fullui.html"),
         onboarding: resolve(__dirname, "onboarding.html"),
+        splash: resolve(__dirname, "splash.html"),
         "visual-recall": resolve(__dirname, "visual-recall.html"),
       },
     },

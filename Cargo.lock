@@ -4323,6 +4323,7 @@ dependencies = [
  "shogun-fusion",
  "shogun-integrations",
  "shogun-license",
+ "shogun-mark",
  "shogun-mcp",
  "shogun-memory",
  "spike-harness",
@@ -4367,6 +4368,13 @@ dependencies = [
  "ed25519-dalek",
  "serde_json",
  "shogun-agents",
+]
+
+[[package]]
+name = "shogun-mark"
+version = "0.0.0"
+dependencies = [
+ "image",
 ]
 
 [[package]]

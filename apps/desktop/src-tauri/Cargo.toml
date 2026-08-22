@@ -30,6 +30,8 @@ tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 spike-harness = { path = "../../../crates/spike-harness" }
+# The mark as geometry + coverage: the Dock and menu-bar icons fold without a webview.
+shogun-mark = { path = "../../../crates/shogun-mark" }
 shogun-core = { path = "../../../crates/shogun-core" }
 notify = "6.1"
 
@@ -74,6 +76,10 @@ objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen", "NSGraphics",
     "NSWorkspace", "NSRunningApplication", "NSDragging", "NSDraggingItem",
     "NSDraggingSession", "NSEvent", "NSImage", "libc",
+    # The launch fold hands the Dock a new NSImage per frame (NSApplication), and asks the OS
+    # whether this Mac's owner wants less movement before it starts (NSAccessibility, on
+    # NSWorkspace). Both pull only objc2-foundation modules already enabled below.
+    "NSApplication", "NSAccessibility",
     # UI cue playback (#49). NSSound plays the embedded WAVs through the normal output at the
     # app's volume — the alert-sound path would take the volume control away from the user.
     "NSSound",

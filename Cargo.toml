@@ -14,6 +14,7 @@ members = [
     "crates/shogun-mcp",
     "crates/shogun-integrations",
     "crates/shogun-cli",
+    "crates/shogun-mark",
     "crates/spike-harness",
     "crates/memory-bench",
     "apps/desktop/src-tauri",

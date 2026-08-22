@@ -28,6 +28,7 @@ mod hover;
 mod inline_source;
 mod integrate;
 mod launch_at_login;
+mod mark_launch;
 pub mod meeting;
 #[cfg(target_os = "macos")]
 mod meeting_live_summary;
@@ -56,6 +57,7 @@ mod search_ui;
 /// UI cue playback and the silence rules around it (#49, docs/sound-design.md).
 #[cfg(target_os = "macos")]
 mod sound;
+mod splash;
 mod startup_health;
 mod user_config_watch;
 mod visual_recall;
