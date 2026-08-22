@@ -57,6 +57,8 @@ pub enum Tool {
     VoiceDictionaryCreate,
     VoiceDictionaryUpdate,
     VoiceDictionaryDelete,
+    MeetingMicrophoneGet,
+    MeetingMicrophoneSet,
 }
 
 /// Every tool, for exhaustive iteration (settings / tests).
@@ -93,6 +95,8 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::VoiceDictionaryCreate,
     Tool::VoiceDictionaryUpdate,
     Tool::VoiceDictionaryDelete,
+    Tool::MeetingMicrophoneGet,
+    Tool::MeetingMicrophoneSet,
 ];
 
 impl Tool {
@@ -131,6 +135,8 @@ impl Tool {
             Tool::VoiceDictionaryCreate => "voice_dictionary.create",
             Tool::VoiceDictionaryUpdate => "voice_dictionary.update",
             Tool::VoiceDictionaryDelete => "voice_dictionary.delete",
+            Tool::MeetingMicrophoneGet => "meeting.microphone.get",
+            Tool::MeetingMicrophoneSet => "meeting.microphone.set",
         }
     }
 
@@ -173,7 +179,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::VisualRecallGetFrame
         | Tool::VisualRecallRescanFrame
         | Tool::ProfileWhoami => ApiLevel::Read,
-        Tool::VoiceDictionaryList => ApiLevel::Read,
+        Tool::VoiceDictionaryList | Tool::MeetingMicrophoneGet => ApiLevel::Read,
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
         // a lesson's ON/OFF toggle — same as the Learned UI switch (L1, local, reversible).
@@ -188,6 +194,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         Tool::VoiceDictionaryCreate | Tool::VoiceDictionaryUpdate | Tool::VoiceDictionaryDelete => {
             ApiLevel::Write(Level::L1)
         }
+        Tool::MeetingMicrophoneSet => ApiLevel::Write(Level::L1),
         // propose a state change — one-tap confirm in the Notch.
         Tool::StateProposeUpdate => ApiLevel::Write(Level::L2),
         // launch a preset agent — level follows the action it runs.
@@ -349,7 +356,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 32);
+        assert_eq!(ALL_TOOLS.len(), 34);
     }
 
     #[test]
@@ -369,6 +376,18 @@ mod tests {
         );
         assert!(ALL_TOOLS.contains(&Tool::LessonsList));
         assert!(ALL_TOOLS.contains(&Tool::LessonsSetActive));
+    }
+
+    #[test]
+    fn meeting_microphone_tools_are_symmetric_read_and_l1_write() {
+        assert_eq!(
+            Tool::from_wire("meeting.microphone.get"),
+            Some(Tool::MeetingMicrophoneGet)
+        );
+        assert_eq!(
+            tool_level(Tool::MeetingMicrophoneSet),
+            ApiLevel::Write(Level::L1)
+        );
     }
 
     #[test]
@@ -397,6 +416,7 @@ mod tests {
                         | Tool::VisualRecallRescanFrame
                         | Tool::ProfileWhoami
                         | Tool::VoiceDictionaryList
+                        | Tool::MeetingMicrophoneGet
                         | Tool::ActionsStatus
                 )),
                 ApiLevel::Write(_) => {
@@ -412,6 +432,7 @@ mod tests {
                             | Tool::VoiceDictionaryCreate
                             | Tool::VoiceDictionaryUpdate
                             | Tool::VoiceDictionaryDelete
+                            | Tool::MeetingMicrophoneSet
                     ))
                 }
                 ApiLevel::PerAction => assert_eq!(t, Tool::ActionsExecute),

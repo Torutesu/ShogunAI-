@@ -3,7 +3,8 @@
 //! contract; the server's half is `shogun_mcp::rest`.
 
 use crate::command::{
-    Command, LessonsCommand, LessonsList, ListOrGet, VisualRecallCommand, VoiceDictionaryCommand,
+    Command, LessonsCommand, LessonsList, ListOrGet, MeetingMicrophoneCommand, VisualRecallCommand,
+    VoiceDictionaryCommand,
 };
 
 /// An HTTP call: method + path (query folded in) + optional body.
@@ -122,6 +123,13 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
             VoiceDictionaryCommand::Delete { id } => post(
                 format!("/v1/voice_dictionary/terms/{id}/delete"),
                 String::new(),
+            ),
+        },
+        Command::MeetingMicrophone(command) => match command {
+            MeetingMicrophoneCommand::Show => get("/v1/meeting/microphone".to_string()),
+            MeetingMicrophoneCommand::Set { microphone } => post(
+                "/v1/meeting/microphone".to_string(),
+                serde_json::json!({ "microphone": microphone }).to_string(),
             ),
         },
         Command::VisualRecall(cmd) => match cmd {
@@ -355,6 +363,31 @@ mod tests {
             .body
             .as_deref(),
             Some(r#"{"role":"PM"}"#)
+        );
+    }
+
+    #[test]
+    fn meeting_microphone_calls_match_rest_contract() {
+        assert_eq!(
+            to_call(
+                &Command::MeetingMicrophone(MeetingMicrophoneCommand::Show),
+                false,
+            )
+            .unwrap()
+            .path,
+            "/v1/meeting/microphone"
+        );
+        assert_eq!(
+            to_call(
+                &Command::MeetingMicrophone(MeetingMicrophoneCommand::Set {
+                    microphone: Some("Studio Mic".into()),
+                }),
+                false,
+            )
+            .unwrap()
+            .body
+            .as_deref(),
+            Some(r#"{"microphone":"Studio Mic"}"#)
         );
     }
 }

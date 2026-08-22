@@ -9,6 +9,8 @@ export interface MeetingView {
   countdown_ms: number;
   /** Capture/ASR paused; meeting session still open (waveform toggle). */
   paused: boolean;
+  /** Capture did not start; typed notes still remain usable. */
+  audio_error: string | null;
 }
 
 export interface Recap {
@@ -25,7 +27,9 @@ export interface MeetingTranscript {
 }
 
 export interface MeetingSettings {
+  microphone?: string | null;
   meeting_mode: MeetingMode;
+  language: MeetingLanguage;
   source_lang: MeetingLanguage;
   target_lang: MeetingLanguage;
   my_lang: MeetingLanguage;

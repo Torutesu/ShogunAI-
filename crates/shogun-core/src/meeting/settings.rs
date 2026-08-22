@@ -102,6 +102,10 @@ impl MeetingLanguage {
 pub struct Settings {
     /// Tier (a). `false` is the shipped default (FR-MT-01).
     pub enabled: bool,
+    /// Input used for meeting capture. `None` follows the current macOS default. A selected
+    /// device that disappears is rejected at capture time; SHOGUN never silently falls back.
+    #[serde(default)]
+    pub microphone: Option<String>,
     /// Tier (b): bundle ids (and meeting hosts) that never offer.
     pub excluded_apps: BTreeSet<String>,
     /// Tier (b), the calendar half: occurrence external ids that never offer — the recurring 1:1
@@ -158,6 +162,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: false,
+            microphone: None,
             excluded_apps: BTreeSet::new(),
             excluded_occurrences: BTreeSet::new(),
             asr_backend: AsrBackend::Deepgram,
@@ -350,6 +355,7 @@ mod tests {
 
         assert!(!restored.enabled);
         assert!(restored.excluded_apps.is_empty());
+        assert_eq!(restored.microphone, None);
     }
 
     #[test]

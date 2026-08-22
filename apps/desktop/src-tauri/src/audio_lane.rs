@@ -457,28 +457,37 @@ fn run_live_loop(
 }
 
 /// Start listening for meeting `session_id` with live `settings`.
-/// Returns `None` (notes only) whenever any piece of the pipeline is unavailable.
+///
+/// Failure is returned to the meeting UI. The interval still accepts typed notes, but users must
+/// never have to infer that a selected microphone was missing from a quiet transcript.
 pub fn start(
     app: &tauri::AppHandle,
     session_id: i64,
     settings: Arc<RwLock<Settings>>,
-) -> Option<Handle> {
+) -> Result<Handle, String> {
     let db = app.try_state::<Db>().map(|s| s.inner().clone());
     let Some(db) = db else {
         eprintln!("[meeting] no database for the audio lane; notes only");
-        return None;
+        return Err("Meeting notes database is unavailable.".into());
     };
 
-    let (backend, model, language) = {
-        let s = settings.read().ok()?;
-        (resolve_asr_backend(&s), s.asr_model, s.asr_language())
+    let (backend, model, language, microphone) = {
+        let s = settings
+            .read()
+            .map_err(|_| "Meeting settings are unavailable.".to_string())?;
+        (
+            resolve_asr_backend(&s),
+            s.asr_model,
+            s.asr_language(),
+            s.microphone.clone(),
+        )
     };
 
-    let mic = match shogun_core::audio::capture::mic::Mic::open() {
+    let mic = match shogun_core::audio::capture::mic::Mic::open_with_device(microphone.as_deref()) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("[meeting] microphone unavailable ({e}); notes only");
-            return None;
+            return Err(format!("Meeting microphone unavailable: {e}"));
         }
     };
 
@@ -515,7 +524,7 @@ pub fn start(
                         run_live_loop(source, me, other, sink, stop_flag, last_audio_flag);
                     });
                     eprintln!("[meeting] audio lane started for session {session_id}");
-                    Some(Handle {
+                    Ok(Handle {
                         stop,
                         join: Some(join),
                         last_audio_at,
@@ -529,7 +538,7 @@ pub fn start(
                         Ok(d) => d,
                         Err(e2) => {
                             eprintln!("[meeting] deepgram unavailable ({e2}); notes only");
-                            return None;
+                            return Err(format!("Meeting transcription unavailable: {e2}"));
                         }
                     };
                     let asr = MeetingAsr::Deepgram(d);
@@ -541,7 +550,7 @@ pub fn start(
                     eprintln!(
                         "[meeting] audio lane started for session {session_id} (HTTP fallback)"
                     );
-                    Some(Handle {
+                    Ok(Handle {
                         stop,
                         join: Some(join),
                         last_audio_at,
@@ -550,7 +559,8 @@ pub fn start(
             }
         }
         AsrBackend::Whisper => {
-            let w = build_whisper(app, model, language)?;
+            let w = build_whisper(app, model, language)
+                .ok_or_else(|| "Meeting transcription unavailable: Whisper model failed to load.".to_string())?;
             eprintln!("[meeting] ASR backend=whisper (offline/dev fallback)");
             let asr = MeetingAsr::Whisper(w);
             let worker = Worker::new(source, asr).with_live_settings(settings.clone());
@@ -565,7 +575,7 @@ pub fn start(
                 run_worker_loop(worker, &mut sink, stop_flag, last_audio_flag);
             });
             eprintln!("[meeting] audio lane started for session {session_id}");
-            Some(Handle {
+            Ok(Handle {
                 stop,
                 join: Some(join),
                 last_audio_at,
