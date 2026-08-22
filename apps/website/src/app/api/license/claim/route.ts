@@ -4,9 +4,20 @@ import { redeemClaimNonce } from '@/db/billing-queries';
 import { HttpError, fail, readJsonObject } from '@/lib/http';
 import { isValidClaimNonce, licenseKeyFingerprint } from '@/lib/license';
 import { rateLimit } from '@/lib/rate-limit';
+import { withTimeout } from '@/lib/timeout';
 import { clientIp } from '@/lib/waitlist-auth';
 
 export const runtime = 'nodejs';
+
+/**
+ * Deadline for the database reads this route waits on. A stalled connection is not a rejected
+ * promise, so without this the Workers runtime kills the request and the route's own error
+ * handling never runs — the caller gets a dead request instead of the 500 it is written to
+ * return. A 500 matters here: the buying Mac polls this route, and a dead request
+ * spends one of its attempts learning nothing.
+ */
+const DB_TIMEOUT_MS = 3_000;
+
 
 /**
  * POST /api/license/claim — the Mac collects the licence it just paid for.
@@ -47,7 +58,11 @@ export async function POST(req: Request) {
     NextResponse.json({ ok: true, pending: true }, { headers: { 'Cache-Control': 'no-store' } });
 
   try {
-    const licenseKey = await redeemClaimNonce(nonce, new Date());
+    const licenseKey = await withTimeout(
+      redeemClaimNonce(nonce, new Date()),
+      DB_TIMEOUT_MS,
+      'claim redemption',
+    );
     if (!licenseKey) return pending();
 
     // Fingerprint only — the key itself never reaches a log line.

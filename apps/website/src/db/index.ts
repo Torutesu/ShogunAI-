@@ -17,13 +17,31 @@ const LOCAL_FALLBACK = 'postgres://postgres:postgres@localhost:5432/shogun_waitl
  * `db:migrate` all reach this module that way. The throw is the signal to fall back, not an
  * error: returning null here is the normal path everywhere except production.
  */
+let announced = false;
+
 function hyperdriveUrl(): string | null {
   try {
     const env = getCloudflareContext().env as { HYPERDRIVE?: { connectionString?: string } };
-    return env.HYPERDRIVE?.connectionString ?? null;
-  } catch {
+    const url = env.HYPERDRIVE?.connectionString ?? null;
+    announce(url ? 'hyperdrive' : 'direct: the HYPERDRIVE binding is missing from this deployment');
+    return url;
+  } catch (e) {
+    announce(`direct: the Cloudflare context was unreadable: ${(e as Error).message}`);
     return null;
   }
+}
+
+/**
+ * Say which connection this isolate chose, once, in production.
+ *
+ * Both outcomes are logged, not just the fallback. Silence is not evidence — a log that only
+ * appears when something is wrong cannot distinguish "the binding works" from "these requests
+ * never got far enough to check", and that is the exact ambiguity this was added to settle.
+ */
+function announce(how: string): void {
+  if (announced || process.env.NODE_ENV !== 'production') return;
+  announced = true;
+  console.error(`db: connecting via ${how}`);
 }
 
 /**
