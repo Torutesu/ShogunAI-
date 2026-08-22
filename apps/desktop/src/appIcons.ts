@@ -17,7 +17,9 @@ const BUNDLES: Record<string, AppInfo> = {
   "com.apple.SafariTechnologyPreview": { label: "Safari", color: "#6BB8FF" },
   "com.microsoft.VSCode": { label: "Code", color: "#5BB8E8" },
   "com.todesktop.230313mzl4w4u92": { label: "Cursor", color: "#A78BFA" },
-  "com.slack.Slack": { label: "Slack", color: "#E8A0BF" },
+  // Slack's real bundle id (same one meeting detection and the connect offer key off) — the
+  // desktop app has never shipped as "com.slack.Slack".
+  "com.tinyspeck.slackmacgap": { label: "Slack", color: "#E8A0BF" },
   "com.apple.mail": { label: "Mail", color: "#6BA3FF" },
   "com.apple.finder": { label: "Finder", color: "#7DD3FC" },
   "com.apple.Terminal": { label: "Terminal", color: "#94A3B8" },

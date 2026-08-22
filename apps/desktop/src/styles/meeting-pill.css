@@ -82,3 +82,24 @@
   padding-inline: 12px;
 }
 
+/* Offer pills — the meeting offer and the connect-this-app offer (#86). A title plus up to
+   three buttons doesn't fit the 180px notch cutout, so both get a fixed wider window matching
+   W_OFFER_COLLAPSED in App.tsx (the voice pill's pattern): the pill fills its window exactly,
+   so no clipped buttons and no transparent dead-click margin. */
+.mpill--offer,
+.mpill--connect {
+  width: 380px;
+  min-width: 380px;
+  max-width: 380px;
+}
+/* The title absorbs the slack (and ellipsizes first) so the buttons stay pinned to the right
+   edge regardless of the title's length. */
+.mpill--offer .mpill__title,
+.mpill--connect .mpill__title {
+  flex: 1;
+}
+/* De-emphasised "No" — the permanent answer should not be the loudest one. */
+.mpill__btn--quiet {
+  color: var(--muted);
+}
+
