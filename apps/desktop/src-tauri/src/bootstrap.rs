@@ -234,6 +234,10 @@ fn setup_macos(app: &tauri::App) {
     );
     eprintln!("========================================================");
 
+    // First thing on screen: the mark folding itself together while everything below this line
+    // gets going. Built hidden and closed on its own timer, so a launch never waits on it.
+    splash::mac::init(app);
+
     // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'
     // Spaces — onActiveSpace/drawn stayed false through hundreds of re-orders with both
     // canJoinAllSpaces (273) and moveToActiveSpace (274). That's an OS wall, not a flag problem.
@@ -353,6 +357,11 @@ fn setup_macos(app: &tauri::App) {
             eprintln!("[shell] tray menu items failed to build");
         }
     }
+
+    // Both icons AppKit draws for us fold themselves in, once, and then hand the real artwork
+    // back. After the tray block on purpose: the menu-bar half has nothing to animate until the
+    // tray it belongs to exists.
+    mark_launch::mac::init(app);
 
     // T-06: geometry (panel screen + CG conversion constants).
     let Some(mtm) = objc2::MainThreadMarker::new() else {

@@ -1,0 +1,28 @@
+/* The launch window. Transparent all the way through: the mark folds against whatever is behind
+   it, so the launch reads as the mark arriving rather than as a panel opening.
+
+   Imported by the splash entry only, never from styles.css — it makes html and body transparent,
+   which every other window would otherwise inherit. */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+}
+
+.splash {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  /* The window has no decorations and cannot be dragged; say so with the cursor rather than
+     letting the pointer look interactive over it. */
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The mark is the only thing here, so it gets the full arrival. Under reduced motion
+   logo-motion.css already drops the fold to a fade, which is the right amount for a window that
+   is on screen for about a second. */
