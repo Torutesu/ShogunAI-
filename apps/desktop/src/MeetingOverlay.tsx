@@ -18,7 +18,16 @@ import { DragHandle6Dot } from "./DragHandle6Dot";
 import { ResizeCornerHandle } from "./ResizeCornerHandle";
 import { t } from "./strings";
 import { uiLog } from "./uiLog";
-import { IconCopy, IconSettings, IconSliders } from "./utilityIcons";
+import {
+  IconBookOpen,
+  IconCopy,
+  IconEye,
+  IconGlobe,
+  IconKeyboard,
+  IconMicrophone,
+  IconSliders,
+  IconVolume2,
+} from "./utilityIcons";
 import {
   buildTimeline,
   clock,
@@ -1228,7 +1237,7 @@ export function MeetingOverlay(): JSX.Element | null {
                 {morePage === "root" ? (
                   <>
                     <div className="ov__more-stealth">
-                      <IconSettings className="ov__more-icon" size={16} />
+                      <IconEye className="ov__more-icon" size={16} />
                       <div className="ov__more-copy">
                         <strong>{t.meetingMoreStealth}</strong>
                         <span>{t.meetingMoreStealthHint}</span>
@@ -1256,24 +1265,24 @@ export function MeetingOverlay(): JSX.Element | null {
                     </label>
                     <div className="ov__more-rule" />
                     <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
-                      <IconSettings className="ov__more-icon" size={16} />
+                      <IconBookOpen className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreDictionary}</span><b>›</b>
                     </button>
                     <button type="button" className="ov__more-row" onClick={() => setMorePage("language")}>
-                      <IconSettings className="ov__more-icon" size={16} />
+                      <IconGlobe className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreLanguage}</span><em>{modeLabel(settings.meeting_mode)}</em><b>›</b>
                     </button>
                     <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
-                      <IconSettings className="ov__more-icon" size={16} />
+                      <IconKeyboard className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreShortcuts}</span><b>›</b>
                     </button>
                     <div className="ov__more-rule" />
                     <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
-                      <IconSettings className="ov__more-icon" size={16} />
+                      <IconMicrophone className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreMicrophone}</span><em>{settings.microphone ?? t.meetingMoreDefaultInput}</em><b>›</b>
                     </button>
                     <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
-                      <IconSettings className="ov__more-icon" size={16} />
+                      <IconVolume2 className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreSystemAudio}</span><em>{t.meetingMoreAutomatic}</em><b>›</b>
                     </button>
                   </>
