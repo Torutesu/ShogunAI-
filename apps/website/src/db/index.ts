@@ -6,23 +6,19 @@ import * as schema from './schema';
 const LOCAL_FALLBACK = 'postgres://postgres:postgres@localhost:5432/shogun_waitlist';
 
 /**
- * The Hyperdrive binding's connection string, when one is bound and we are inside a request.
- *
  * Hyperdrive terminates the connection inside Cloudflare's network, so the Worker never opens a
- * raw socket through the `nodejs_compat` shim — the layer that fails in production with `proxy
- * request failed, cannot connect to the specified address`, taking roughly half of all database
- * calls with it.
+ * raw socket to Supabase through the `nodejs_compat` shim. It is preferred wherever it is bound.
  *
  * `getCloudflareContext()` throws outside a Worker request, and `next dev`, the test suites and
  * `db:migrate` all reach this module that way. The throw is the signal to fall back, not an
- * error: returning null here is the normal path everywhere except production.
+ * error: it is the normal path everywhere except production.
  */
 let announced = false;
 
 /**
  * Which transport the last `resolve()` picked, as a fixed token safe to hand to a caller.
  *
- * Deliberately an enum of three, not a free-form string: it names the transport and nothing about
+ * Deliberately a closed set, not a free-form string: it names the transport and nothing about
  * the host, the credentials or the error text, so an error response can carry it without leaking
  * anything. `unresolved` means no query has been attempted in this isolate yet.
  */
@@ -35,13 +31,18 @@ export function connectionMode(): ConnectionMode {
   return mode;
 }
 
-function hyperdriveUrl(): string | null {
+type CfContext = { env: { HYPERDRIVE?: { connectionString?: string } } };
+
+/**
+ * The current request's Cloudflare context, or null when there is no request.
+ *
+ * OpenNext runs each request inside `AsyncLocalStorage.run({ env, ctx, cf }, …)` with a fresh
+ * object literal, so the value this returns is a per-request identity — which is what makes it
+ * usable as the cache key below.
+ */
+function requestContext(): CfContext | null {
   try {
-    const env = getCloudflareContext().env as { HYPERDRIVE?: { connectionString?: string } };
-    const url = env.HYPERDRIVE?.connectionString ?? null;
-    mode = url ? 'hyperdrive' : 'direct-binding-missing';
-    announce(url ? 'hyperdrive' : 'direct: the HYPERDRIVE binding is missing from this deployment');
-    return url;
+    return getCloudflareContext() as unknown as CfContext;
   } catch (e) {
     mode = 'direct-no-context';
     announce(`direct: the Cloudflare context was unreadable: ${(e as Error).message}`);
@@ -49,12 +50,23 @@ function hyperdriveUrl(): string | null {
   }
 }
 
+function hyperdriveUrl(cf: CfContext): string | null {
+  const url = cf.env.HYPERDRIVE?.connectionString ?? null;
+  mode = url ? 'hyperdrive' : 'direct-binding-missing';
+  announce(url ? 'hyperdrive' : 'direct: the HYPERDRIVE binding is missing from this deployment');
+  return url;
+}
+
 /**
  * Say which connection this isolate chose, once, in production.
  *
  * Both outcomes are logged, not just the fallback. Silence is not evidence — a log that only
  * appears when something is wrong cannot distinguish "the binding works" from "these requests
- * never got far enough to check", and that is the exact ambiguity this was added to settle.
+ * never got far enough to check".
+ *
+ * Firing once per isolate rather than once per request turned out to matter more than the text:
+ * it made "this isolate is on its first request" visible in the log, and lining that column up
+ * against the status column is what identified the reuse bug that `perRequest` below fixes.
  */
 function announce(how: string): void {
   if (announced || process.env.NODE_ENV !== 'production') return;
@@ -63,11 +75,12 @@ function announce(how: string): void {
 }
 
 /**
- * Reset the recorded transport. Tests only — production has one isolate-lifetime answer.
+ * Reset the recorded transport and drop the off-request client. Tests only.
  */
 export function resetConnectionModeForTests(): void {
   mode = 'unresolved';
   announced = false;
+  shared = null;
 }
 
 /**
@@ -81,25 +94,32 @@ function directUrl(): string {
 type Client = ReturnType<typeof postgres>;
 type Db = ReturnType<typeof drizzle<typeof schema>>;
 
-let cached: { url: string; client: Client; db: Db } | null = null;
+type Entry = { url: string; client: Client; db: Db };
 
 /**
- * Resolve the client, re-creating it only when the connection string changes.
+ * Clients are scoped to the request that opened them.
  *
- * Deliberately lazy. The Hyperdrive binding exists only inside a request, and this module is
- * evaluated once per isolate at import time — so reading it eagerly would always miss, and every
- * production query would silently take the broken direct path instead.
+ * A Worker may not reuse a socket across requests — Cloudflare's TCP socket documentation states
+ * it outright ("TCP sockets cannot be created in global scope and shared across requests. You
+ * should always create TCP sockets within a handler"). Caching one client for the isolate broke
+ * exactly that rule, and production showed the consequence with no exceptions in 40 requests:
+ * every request that opened the connection itself answered 404 (a completed read), and every
+ * request that inherited one from an earlier request hung until its 3s deadline and answered 500.
+ *
+ * The key is the request context object, which OpenNext creates fresh per request. A WeakMap
+ * rather than a single slot so that two requests interleaving in one isolate keep their own
+ * client instead of evicting each other's, and so both are collectable once the requests end.
  */
-function resolve(): { url: string; client: Client; db: Db } {
-  const viaHyperdrive = hyperdriveUrl();
-  const url = viaHyperdrive ?? directUrl();
-  if (cached?.url === url) return cached;
+const perRequest = new WeakMap<object, Entry>();
 
+/** The one client used where there is no request: tests, `next dev`, `db:migrate`. */
+let shared: Entry | null = null;
+
+function open(url: string, viaHyperdrive: boolean): Entry {
   const client = postgres(url, {
     /**
-     * One per isolate. Cloudflare runs many isolates at once, so `max` is multiplied by however
-     * many are live rather than being a cap on what the site opens — and a route handler here
-     * awaits its queries one at a time, so a second connection buys nothing.
+     * One per request. A route handler awaits its queries one at a time, so a second connection
+     * buys nothing, and the client no longer outlives the request that opened it.
      */
     max: 1,
     /**
@@ -115,9 +135,36 @@ function resolve(): { url: string; client: Client; db: Db } {
      */
     ...(viaHyperdrive ? { fetch_types: false } : {}),
   });
+  return { url, client, db: drizzle(client, { schema }) };
+}
 
-  cached = { url, client, db: drizzle(client, { schema }) };
-  return cached;
+/**
+ * Resolve the client for whoever is asking.
+ *
+ * Deliberately lazy. The Hyperdrive binding exists only inside a request, and this module is
+ * evaluated once per isolate at import time — so reading it eagerly would always miss, and every
+ * production query would silently take the direct path instead.
+ *
+ * `client.end()` is never called here. postgres.js refuses queries once a client has ended, and
+ * this runs on first property access rather than at the close of a handler we control, so an
+ * eager end would break the very request that opened the connection. The runtime closes
+ * request-scoped I/O when the request finishes, which is what the per-request scope buys.
+ */
+function resolve(): Entry {
+  const cf = requestContext();
+  if (!cf) {
+    const url = directUrl();
+    if (shared?.url !== url) shared = open(url, false);
+    return shared;
+  }
+
+  const hit = perRequest.get(cf);
+  if (hit) return hit;
+
+  const viaHyperdrive = hyperdriveUrl(cf);
+  const entry = open(viaHyperdrive ?? directUrl(), viaHyperdrive !== null);
+  perRequest.set(cf, entry);
+  return entry;
 }
 
 /**
