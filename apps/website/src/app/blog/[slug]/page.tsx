@@ -127,8 +127,39 @@ async function BlogPost({ params, searchParams }: { params: Promise<{ slug: stri
             <Image src={post.image} alt={post.title} fill sizes="(max-width: 720px) 100vw, 720px" className="object-cover" priority />
           </div>
 
+          {/* Attribution for licensed cover photos: author, licence, and the note that it was changed. */}
+          {post.imageCredit && (
+            <p className="mt-2.5 text-xs text-muted">
+              {post.imageCreditHref ? (
+                <a
+                  href={post.imageCreditHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline decoration-border underline-offset-4 transition-colors hover:text-ink"
+                >
+                  {post.imageCredit}
+                </a>
+              ) : (
+                post.imageCredit
+              )}
+              {post.imageLicense && (
+                <>
+                  {' · '}
+                  <a
+                    href={post.imageLicenseHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline decoration-border underline-offset-4 transition-colors hover:text-ink"
+                  >
+                    {post.imageLicense}
+                  </a>
+                </>
+              )}
+            </p>
+          )}
+
           <div
-            className="mt-10 text-[17px] leading-[1.75] text-ink [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:border-accent [&_blockquote]:pl-4 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-cloud [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_h2]:mt-10 [&_h2]:font-display [&_h2]:text-2xl [&_h2]:font-semibold [&_h3]:mt-8 [&_h3]:font-display [&_h3]:text-xl [&_h3]:font-semibold [&_li]:my-1 [&_p]:mt-5 [&_pre]:mt-5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-cloud [&_pre]:p-4 [&_ul]:mt-5 [&_ul]:list-disc [&_ul]:pl-5"
+            className="mt-10 text-[17px] leading-[1.75] text-ink [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:border-accent [&_blockquote]:pl-4 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-cloud [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_h2]:mt-10 [&_h2]:font-display [&_h2]:text-2xl [&_h2]:font-semibold [&_h3]:mt-8 [&_h3]:font-display [&_h3]:text-xl [&_h3]:font-semibold [&_img]:mx-auto [&_img]:my-8 [&_img]:h-auto [&_img]:max-h-[560px] [&_img]:w-auto [&_img]:max-w-full [&_img]:rounded-xl [&_img]:border [&_img]:border-border [&_li]:my-1 [&_p]:mt-5 [&_pre]:mt-5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-cloud [&_pre]:p-4 [&_ul]:mt-5 [&_ul]:list-disc [&_ul]:pl-5"
             dangerouslySetInnerHTML={{ __html: post.html }}
           />
 

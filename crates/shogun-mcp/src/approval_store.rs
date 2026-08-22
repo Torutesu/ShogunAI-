@@ -5,7 +5,9 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(unix)]
+use std::time::Duration;
 
 use shogun_agents::approval::{
     ApprovalId, ApprovalOrigin, ApprovalQueue, ApprovalStatus, PendingRecord, Preview, Route,
@@ -257,7 +259,9 @@ pub fn load_queue(path: &Path) -> Result<ApprovalQueue, String> {
     }
 }
 
-struct StoreLock(File);
+// The handle is only *read* on unix (flock/unlock); on other platforms it exists to hold the
+// file open for the lock file's lifetime.
+struct StoreLock(#[cfg_attr(not(unix), allow(dead_code))] File);
 impl Drop for StoreLock {
     fn drop(&mut self) {
         #[cfg(unix)]
@@ -341,6 +345,9 @@ fn save_unlocked(path: &Path, queue: &ApprovalQueue) -> Result<(), String> {
         .and_then(|_| file.sync_all())
         .map_err(|_| "cannot persist approval store".to_string())?;
     fs::rename(&temp, path).map_err(|_| "cannot replace approval store".to_string())?;
+    // Directory fsync is a unix durability step; Windows cannot File::open a directory at all,
+    // so this must not run there (it would fail every save).
+    #[cfg(unix)]
     if let Some(parent) = path.parent() {
         File::open(parent)
             .and_then(|dir| dir.sync_all())

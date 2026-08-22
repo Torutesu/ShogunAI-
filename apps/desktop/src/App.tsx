@@ -34,16 +34,25 @@ import {
 } from "./fullui/FullUi";
 import { SAMPLE_VIEW } from "./fullui/sample";
 import type { FullUiView } from "./fullui/types";
+import {
+  formatStorageBytes,
+  panelSizeForView,
+  type Appearance,
+  type Citation,
+  type Msg,
+  type OpenPanelView,
+  type Size,
+  type VoiceView,
+} from "./appShell";
+
+export { formatStorageBytes, panelSizeForView } from "./appShell";
+export type { Size, OpenPanelView, VoiceView } from "./appShell";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
 // hotkey), so it always works as long as the window renders. The Rust engine still feeds live
 // `context` (the app you're reading) and the data lives in Rust (CLAUDE.md invariant 1); the webview
 // owns only presentation. All-spaces/background float (NSPanel) is a separate, gated path.
-
-type Appearance = "auto" | "light" | "dark";
-type Citation = { event_id: number; source: string; title: string | null };
-type Msg = { role: "me" | "shogun"; text: string; citations?: Citation[] };
 
 interface ContextPayload {
   bundle_id: string;
@@ -116,15 +125,6 @@ interface StartupHealth {
   memory_fault: string | null;
   /** Store failures since launch; monotonic, so repeated flapping stays visible. */
   memory_faults_total: number;
-}
-
-/** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
-export interface VoiceView {
-  phase: "idle" | "recording" | "processing" | "response" | "error";
-  transcript: string;
-  response: string;
-  error: string;
-  level: number;
 }
 
 interface LevelEvent {
@@ -201,18 +201,6 @@ const MIN_H = 240;
 const W_HANDLE_FALLBACK = 180;
 /** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
 const W_HIDE = 180;
-
-export interface Size {
-  w: number;
-  h: number;
-}
-
-export type OpenPanelView = "chat" | "settings" | "hub";
-
-/** Chat and Settings share one frame. Only Overview owns a separate remembered workspace size. */
-export function panelSizeForView(view: OpenPanelView, chatSize: Size, hubSize: Size): Size {
-  return view === "hub" ? hubSize : chatSize;
-}
 
 // Hard ceiling: panel cannot exceed ¾ of the display the webview is on. `window.screen` tracks the
 // panel's monitor in Tauri; Rust `set_panel_size` enforces the same cap on the native frame.
@@ -798,6 +786,11 @@ export function App(): JSX.Element {
     window.addEventListener("wheel", onScroll, { passive: true });
     return () => {
       window.removeEventListener("keydown", onEsc);
+      // All three must come off with onEsc: under StrictMode's mount→unmount→remount the
+      // survivors double every interact() call, inflating the Q4 interaction tally.
+      window.removeEventListener("pointerdown", onClick);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("wheel", onScroll);
       if (voiceReleaseWatch.current != null) {
         window.clearInterval(voiceReleaseWatch.current);
         voiceReleaseWatch.current = null;
@@ -2456,11 +2449,14 @@ interface BillingView {
   error: string | null;
 }
 
-/** Unix seconds → a date the reader recognises. */
+/** Unix seconds → a date the reader recognises — in THEIR timezone. toISOString is always UTC,
+ * which told anyone west of UTC their subscription ends a day later than it does. */
 function billingDate(secs: number | null): string {
   if (!secs) return "";
   const d = new Date(secs * 1000);
-  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
 /** The four purchasable combinations. Prices are display copy; the price itself lives server-side. */
@@ -2478,6 +2474,9 @@ function PlanBillingSection(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [choosing, setChoosing] = useState(false);
+  // Set once Checkout opens: the core is polling for the licence this Mac just bought, so the
+  // buyer has nothing to copy. Cleared by the `billing-changed` event the claim emits.
+  const [claiming, setClaiming] = useState(false);
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -2485,6 +2484,21 @@ function PlanBillingSection(): JSX.Element {
     void invoke<BillingView>("billing_status").then(setBilling).catch(() => undefined);
   }, []);
   useEffect(refresh, [refresh]);
+
+  // The claim runs on a background thread in the core and can land minutes after the button was
+  // pressed, so the panel is told rather than polling for it.
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    const un = listen<BillingView>("billing-changed", (e) => {
+      setClaiming(false);
+      setBilling(e.payload);
+      setMsg(e.payload.error ?? "");
+      void invoke<EntitlementView>("entitlement_status").then(setEnt).catch(() => undefined);
+    });
+    return () => {
+      void un.then((f) => f()).catch(() => undefined);
+    };
+  }, []);
 
   const activate = (): void => {
     if (!IN_TAURI || !keyInput.trim()) return;
@@ -2591,7 +2605,10 @@ function PlanBillingSection(): JSX.Element {
               className="keyrow__btn"
               type="button"
               disabled={busy}
-              onClick={() => call("billing_open_checkout", { plan: c.plan, interval: c.interval })}
+              onClick={() => {
+                setClaiming(true);
+                call("billing_open_checkout", { plan: c.plan, interval: c.interval });
+              }}
             >
               {c.label}
             </button>
@@ -2617,6 +2634,7 @@ function PlanBillingSection(): JSX.Element {
         </>
       ) : (
         <>
+          {claiming ? <div className="set__hint">{t.planClaiming}</div> : null}
           <div className="set__hint">{t.planActivateTitle}</div>
           <div className="set__hint">{t.planActivateHint}</div>
           <div className="keyrow">
@@ -2799,23 +2817,85 @@ function DreamSection(): JSX.Element {
 }
 
 /** Hold-to-talk dictation (#44). Beta, off by default; transcript goes to focused field or clipboard. */
+interface VoiceDictionaryTerm {
+  id: number;
+  canonical: string;
+  aliases: string[];
+  locale: string | null;
+  scope: "global" | "bundle" | "surface";
+  scope_ref: string | null;
+  priority: number;
+  enabled: boolean;
+  provenance: "user";
+}
+
 export function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
+  const [sharePersonalVocabulary, setSharePersonalVocabulary] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [microphone, setMicrophone] = useState<string | null>(null);
+  const [microphones, setMicrophones] = useState<string[]>([]);
+  const [microphonesLoaded, setMicrophonesLoaded] = useState(false);
+  const [microphoneBusy, setMicrophoneBusy] = useState(false);
+  const [microphoneError, setMicrophoneError] = useState("");
   const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
   const [editKeyInput, setEditKeyInput] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editMsg, setEditMsg] = useState("");
+  const [terms, setTerms] = useState<VoiceDictionaryTerm[]>([]);
+  const [termInput, setTermInput] = useState("");
+  const [termLocale, setTermLocale] = useState("");
+  const [termScope, setTermScope] = useState<VoiceDictionaryTerm["scope"]>("global");
+  const [termScopeRef, setTermScopeRef] = useState("");
+  const [termPriority, setTermPriority] = useState("0");
+  const [termEnabled, setTermEnabled] = useState(true);
+  const [editingTerm, setEditingTerm] = useState<VoiceDictionaryTerm | null>(null);
+  const [termsBusy, setTermsBusy] = useState(false);
+  const [termsMsg, setTermsMsg] = useState("");
+  const [termsLoadState, setTermsLoadState] = useState<"loading" | "ready" | "error">("loading");
+
+  const loadTerms = useCallback((): void => {
+    if (!IN_TAURI) {
+      setTermsLoadState("ready");
+      return;
+    }
+    setTermsLoadState("loading");
+    setTermsMsg("");
+    void invoke<VoiceDictionaryTerm[]>("list_voice_dictionary_terms")
+      .then((loaded) => {
+        setTerms(loaded);
+        setTermsLoadState("ready");
+      })
+      .catch((err: unknown) => {
+        setTermsLoadState("error");
+        setTermsMsg(String(err));
+      });
+  }, []);
+
+  const loadMicrophones = useCallback((): void => {
+    if (!IN_TAURI || microphonesLoaded) return;
+    void invoke<string[]>("get_voice_microphones")
+      .then((devices) => {
+        setMicrophones(devices);
+        setMicrophonesLoaded(true);
+      })
+      .catch(() => setMicrophoneError(t.voiceMicrophoneUnavailable));
+  }, [microphonesLoaded]);
 
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean }>("get_voice_settings")
-      .then((s) => setOn(s.enabled))
+    void invoke<{ enabled: boolean; microphone?: string | null; share_personal_dictionary_with_speech_provider: boolean }>("get_voice_settings")
+      .then((s) => {
+        setOn(s.enabled);
+        setMicrophone(s.microphone ?? null);
+        setSharePersonalVocabulary(s.share_personal_dictionary_with_speech_provider);
+      })
       .catch(() => undefined);
     void invoke<{ model: string; has_key: boolean }>("get_voice_edit_settings")
       .then(setEdit)
       .catch(() => undefined);
-  }, []);
+    loadTerms();
+  }, [loadTerms]);
 
   const toggle = (next: boolean): void => {
     if (!IN_TAURI) {
@@ -2826,6 +2906,34 @@ export function VoiceSection(): JSX.Element {
     setOn(next);
     void invoke("set_voice_enabled", { enabled: next })
       .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  const selectMicrophone = (next: string): void => {
+    const selected = next || null;
+    const previous = microphone;
+    setMicrophone(selected);
+    setMicrophoneError("");
+    if (!IN_TAURI) return;
+    setMicrophoneBusy(true);
+    void invoke("set_voice_microphone", { microphone: selected })
+      .catch(() => {
+        setMicrophone(previous);
+        setMicrophoneError(t.voiceMicrophoneSaveFailed);
+      })
+      .finally(() => setMicrophoneBusy(false));
+  };
+
+  const setPersonalVocabularyEgress = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setSharePersonalVocabulary(next);
+      return;
+    }
+    setBusy(true);
+    setTermsMsg("");
+    void invoke("set_voice_dictionary_egress_consent", { consent: next })
+      .then(() => setSharePersonalVocabulary(next))
+      .catch(() => setTermsMsg(t.voiceVocabularyEgressSaveError))
       .finally(() => setBusy(false));
   };
 
@@ -2849,6 +2957,84 @@ export function VoiceSection(): JSX.Element {
       .then(() => setEdit((current) => ({ ...current, has_key: false })))
       .catch((err: unknown) => setEditMsg(String(err)))
       .finally(() => setEditBusy(false));
+  };
+
+  const resetTermEditor = (): void => {
+    setTermInput("");
+    setTermLocale("");
+    setTermScope("global");
+    setTermScopeRef("");
+    setTermPriority("0");
+    setTermEnabled(true);
+    setEditingTerm(null);
+  };
+
+  const saveTerm = (): void => {
+    const canonical = termInput.trim();
+    if (!canonical || termsBusy) return;
+    const aliases = editingTerm
+      ? editingTerm.aliases.filter((alias) => alias !== editingTerm.canonical)
+      : [];
+    const priority = Number.parseInt(termPriority, 10);
+    if (!Number.isSafeInteger(priority)) {
+      setTermsMsg(t.voiceVocabularyPriorityInvalid);
+      return;
+    }
+    const scopeRef = termScope === "global" ? null : termScopeRef.trim() || null;
+    if (termScope !== "global" && !scopeRef) {
+      setTermsMsg(t.voiceVocabularyScopeRefRequired);
+      return;
+    }
+    setTermsBusy(true);
+    setTermsMsg("");
+    const term = {
+      canonical,
+      aliases,
+      locale: termLocale.trim() || null,
+      scope: termScope,
+      scope_ref: scopeRef,
+      priority,
+      enabled: termEnabled,
+    };
+    const request = editingTerm
+      ? invoke<VoiceDictionaryTerm>("update_voice_dictionary_term", { id: editingTerm.id, term })
+      : invoke<VoiceDictionaryTerm>("create_voice_dictionary_term", { term });
+    void request
+      .then((term) => {
+        setTerms((current) => {
+          const position = current.findIndex((currentTerm) => currentTerm.id === term.id);
+          if (position === -1) return [...current, term];
+          return current.map((currentTerm) => (currentTerm.id === term.id ? term : currentTerm));
+        });
+        resetTermEditor();
+      })
+      .catch((err: unknown) => setTermsMsg(String(err)))
+      .finally(() => setTermsBusy(false));
+  };
+
+  const editTerm = (term: VoiceDictionaryTerm): void => {
+    if (termsBusy) return;
+    setEditingTerm(term);
+    setTermInput(term.canonical);
+    setTermLocale(term.locale ?? "");
+    setTermScope(term.scope);
+    setTermScopeRef(term.scope_ref ?? "");
+    setTermPriority(String(term.priority));
+    setTermEnabled(term.enabled);
+    setTermsMsg("");
+  };
+
+  const removeTerm = (id: number): void => {
+    if (termsBusy) return;
+    setTermsBusy(true);
+    setTermsMsg("");
+    void invoke<boolean>("delete_voice_dictionary_term", { id })
+      .then((deleted) => {
+        if (deleted) setTerms((current) => current.filter((term) => term.id !== id));
+        if (editingTerm?.id === id) resetTermEditor();
+      })
+      .catch((err: unknown) => setTermsMsg(String(err)))
+      .finally(() => setTermsBusy(false));
   };
 
   return (
@@ -2876,6 +3062,25 @@ export function VoiceSection(): JSX.Element {
         >
           {t.voiceOn}
         </button>
+      </div>
+      <div className="mic-picker">
+        <label className="set__sublabel" htmlFor="voice-microphone">{t.voiceMicrophone}</label>
+        <select
+          id="voice-microphone"
+          className="mic-picker__control"
+          value={microphone ?? ""}
+          disabled={microphoneBusy}
+          onFocus={loadMicrophones}
+          onChange={(event) => selectMicrophone(event.target.value)}
+        >
+          <option value="">{t.voiceMicrophoneDefault}</option>
+          {microphone && !microphones.includes(microphone) ? (
+            <option value={microphone}>{t.voiceMicrophoneDisconnected(microphone)}</option>
+          ) : null}
+          {microphones.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+        <p className="set__hint set__hint--quiet">{t.voiceMicrophoneHint}</p>
+        {microphoneError ? <p className="set__hint is-err">{microphoneError}</p> : null}
       </div>
       <div className="set__stack set__stack--key">
         <div className="set__label">{t.voiceEditModel}</div>
@@ -2926,6 +3131,170 @@ export function VoiceSection(): JSX.Element {
           ) : null}
         </div>
         <p className="set__hint set__hint--quiet">{t.voiceEditModelHint}</p>
+      </div>
+      <div className="set__stack voice-vocab">
+        <div className="set__label">{t.voiceVocabulary}</div>
+        <p className="set__hint set__hint--quiet">{t.voiceVocabularyHint}</p>
+        <div className="set__sublabel">{t.voiceVocabularyEgress}</div>
+        <p className="set__hint set__hint--quiet">
+          {sharePersonalVocabulary ? t.voiceVocabularyEgressOn : t.voiceVocabularyEgressOff}
+        </p>
+        <label className="voice-vocab__consent">
+          <input
+            type="checkbox"
+            checked={sharePersonalVocabulary}
+            disabled={busy}
+            onChange={(event) => setPersonalVocabularyEgress(event.target.checked)}
+          />
+          {t.voiceVocabularyEgressConsent}
+        </label>
+        {termsMsg ? <p className="set__hint is-err">{termsMsg}</p> : null}
+        {termsLoadState === "error" ? (
+          <div className="set__hint is-err">
+            {t.voiceVocabularyLoadError}
+            <button className="keyrow__btn keyrow__btn--quiet" type="button" disabled={termsBusy} onClick={loadTerms}>
+              {t.voiceVocabularyRetry}
+            </button>
+          </div>
+        ) : termsLoadState === "loading" ? (
+          <p className="set__hint set__hint--quiet">{t.voiceVocabularyLoading}</p>
+        ) : terms.length ? (
+          <div className="voice-vocab__terms" aria-label={t.voiceVocabulary}>
+            {terms.map((term) => (
+              <span className={`voice-vocab__term${term.enabled ? "" : " is-disabled"}`} key={term.id}>
+                {term.canonical}
+                <button
+                  type="button"
+                  aria-label={t.voiceVocabularyEditAria(term.canonical)}
+                  disabled={termsBusy}
+                  onClick={() => editTerm(term)}
+                >
+                  {t.voiceVocabularyEdit}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t.voiceVocabularyRemoveAria(term.canonical)}
+                  disabled={termsBusy}
+                  onClick={() => removeTerm(term.id)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="set__hint set__hint--quiet">{t.voiceVocabularyEmpty}</p>
+        )}
+        <div className="voice-vocab__form">
+          <label className="voice-vocab__field">
+            <span>{t.voiceVocabularyTermLabel}</span>
+            <input
+              className="keyrow__input"
+              type="text"
+              placeholder={t.voiceVocabularyPlaceholder}
+              value={termInput}
+              autoComplete="off"
+              onChange={(event) => {
+                setTermInput(event.target.value);
+                setTermsMsg("");
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                saveTerm();
+              }}
+            />
+          </label>
+          <details className="voice-vocab__advanced">
+            <summary>{t.voiceVocabularyAdvanced}</summary>
+            <div className="voice-vocab__advanced-grid">
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyLocale}</span>
+                <input
+                  className="keyrow__input"
+                  type="text"
+                  placeholder={t.voiceVocabularyLocalePlaceholder}
+                  value={termLocale}
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setTermLocale(event.target.value);
+                    setTermsMsg("");
+                  }}
+                />
+              </label>
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyScope}</span>
+                <select
+                  aria-label={t.voiceVocabularyScope}
+                  value={termScope}
+                  disabled={termsBusy}
+                  onChange={(event) => {
+                    setTermScope(event.target.value as VoiceDictionaryTerm["scope"]);
+                    setTermsMsg("");
+                  }}
+                >
+                  <option value="global">{t.voiceVocabularyScopeGlobal}</option>
+                  <option value="bundle">{t.voiceVocabularyScopeBundle}</option>
+                  <option value="surface">{t.voiceVocabularyScopeSurface}</option>
+                </select>
+              </label>
+              {termScope !== "global" ? (
+                <label className="voice-vocab__field voice-vocab__field--wide">
+                  <span>{t.voiceVocabularyScopeRef}</span>
+                  <input
+                    className="keyrow__input"
+                    type="text"
+                    placeholder={t.voiceVocabularyScopeRefPlaceholder}
+                    value={termScopeRef}
+                    autoComplete="off"
+                    onChange={(event) => {
+                      setTermScopeRef(event.target.value);
+                      setTermsMsg("");
+                    }}
+                  />
+                </label>
+              ) : null}
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyPriority}</span>
+                <input
+                  className="keyrow__input"
+                  type="number"
+                  aria-label={t.voiceVocabularyPriority}
+                  value={termPriority}
+                  step="1"
+                  onChange={(event) => {
+                    setTermPriority(event.target.value);
+                    setTermsMsg("");
+                  }}
+                />
+              </label>
+              <label className="voice-vocab__enabled">
+                <input
+                  type="checkbox"
+                  checked={termEnabled}
+                  disabled={termsBusy}
+                  onChange={(event) => setTermEnabled(event.target.checked)}
+                />
+                {t.voiceVocabularyEnabled}
+              </label>
+            </div>
+          </details>
+          <div className="voice-vocab__actions">
+          <button
+            className="keyrow__btn keyrow__btn--go"
+            type="button"
+            disabled={!termInput.trim() || termsBusy}
+            onClick={saveTerm}
+          >
+            {editingTerm ? t.voiceVocabularySave : t.voiceVocabularyAdd}
+          </button>
+          {editingTerm ? (
+            <button className="keyrow__btn keyrow__btn--quiet" type="button" disabled={termsBusy} onClick={resetTermEditor}>
+              {t.voiceVocabularyCancel}
+            </button>
+          ) : null}
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -3474,14 +3843,6 @@ function LaunchAtLoginSection(): JSX.Element {
   );
 }
 
-export function formatStorageBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / 1024 ** index;
-  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
-}
-
 export function VisualRecallSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -3852,16 +4213,34 @@ interface UserConfigStatus {
   errors: { section: string; line: number; message: string }[];
 }
 
+interface LearnedLessonRow {
+  id: number;
+  instruction: string;
+  evidence_count: number;
+  active: boolean;
+}
+
 function PersonalizationSection(): JSX.Element {
   const [status, setStatus] = useState<UserConfigStatus | null>(null);
+  const [lessons, setLessons] = useState<LearnedLessonRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const refresh = (): void => {
     if (!IN_TAURI) return;
     void invoke<UserConfigStatus>("get_user_config_status").then(setStatus).catch(() => undefined);
+    void invoke<LearnedLessonRow[]>("list_learned_lessons").then(setLessons).catch(() => undefined);
   };
   useEffect(refresh, []);
+
+  const toggleLesson = (id: number, active: boolean): void => {
+    if (!IN_TAURI) return;
+    void invoke<boolean>("set_learned_lesson_active", { id, active })
+      .then(() =>
+        invoke<LearnedLessonRow[]>("list_learned_lessons").then(setLessons).catch(() => undefined),
+      )
+      .catch((e) => setErr(String(e)));
+  };
 
   return (
     <section className="set">
@@ -3906,6 +4285,28 @@ function PersonalizationSection(): JSX.Element {
           {err ? <div className="set__hint is-err">{err}</div> : null}
         </>
       ) : null}
+      <div className="set__label set__label--follow">{t.learnedTitle}</div>
+      <div className="set__hint">{t.learnedHint}</div>
+      {lessons.length === 0 ? (
+        <div className="set__hint">{t.learnedEmpty}</div>
+      ) : (
+        <div className="learned">
+          {lessons.map((row) => (
+            <label className="learned__item" key={row.id}>
+              <input
+                type="checkbox"
+                checked={row.active}
+                aria-label={t.learnedToggle}
+                onChange={(e) => toggleLesson(row.id, e.target.checked)}
+              />
+              <span className="learned__body">
+                <span className="learned__text">{row.instruction}</span>
+                <span className="learned__meta">{t.learnedEvidence(row.evidence_count)}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

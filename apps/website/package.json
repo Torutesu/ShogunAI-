@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "blog:generate": "node scripts/generate-blog-data.mjs",
-    "predev": "pnpm blog:generate",
+    "predev": "pnpm blog:generate && node scripts/build-app-demo.mjs",
     "dev": "next dev",
-    "prebuild": "pnpm blog:generate",
+    "prebuild": "pnpm blog:generate && node scripts/build-app-demo.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint",
@@ -21,7 +21,8 @@
     "e2e:points": "tsx tests/points.e2e.ts",
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy"
+    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "app-demo": "node scripts/build-app-demo.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.1.1",

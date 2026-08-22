@@ -1,5 +1,7 @@
 # ShogunAI
 
+> Your personal AGI on your PC. Built to finish real work.
+>
 > ShogunAI is a private, local-first AI memory for knowledge workers on macOS.
 > It captures work context, recalls decisions and conversations in natural
 > language, and turns that context into action across connected tools.
@@ -43,7 +45,13 @@
 - Memory stays local by default
 - Capture reads text through the macOS accessibility layer; no image is stored by default
 - Visual recall is opt-in and off until enabled: only where a window yields no text, a
-  compressed frame is kept locally in the encrypted database for at most 72 hours, then
-  deleted automatically. Frames are never uploaded, and audio is out of scope
+  compressed screenshot is kept locally in the encrypted database for a retention period
+  the user selects (presets of one to seven days plus a bounded custom duration; three
+  days by default), then deleted automatically at that age. Saved frames can be viewed
+  or deleted locally during the window. Frames are never uploaded, and audio is out of scope
+- Meeting audio is never written to disk or a temp file; only the transcript persists. Live
+  transcription streams audio to a speech service for the length of the call, it is never used
+  to train models, the app discloses it in the meeting interface, and the traceability log
+  records it like any other egress
 - Connected providers receive only the context required for an enabled request
 - Consequential actions require review

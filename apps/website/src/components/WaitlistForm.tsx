@@ -68,6 +68,7 @@ export function WaitlistForm({
       setState('idle');
       setEmail('');
       setMsg(labels.okListed);
+      window.dispatchEvent(new Event('waitlist:updated'));
     } catch {
       setState('error');
       setMsg(labels.errNetwork);
@@ -125,8 +126,12 @@ export function WaitlistForm({
         <p className={`basis-full px-1 text-sm ${state === 'error' ? 'text-danger' : isCta ? 'text-white/88' : 'text-accent-strong'}`}>{msg}</p>
       )}
       </form>
+      {/* In the hero this line sits over the artwork, so it carries its own
+        * scrim rather than relying on whatever pixels happen to be behind it. */}
       <p className={`mt-2 text-center text-[11px] leading-relaxed ${isCta ? 'text-white/58' : 'text-muted'}`}>
-        {labels.noCost}
+        <span className={isCta ? '' : 'inline-block rounded-full bg-white/70 px-2.5 py-1 backdrop-blur-sm'}>
+          {labels.noCost}
+        </span>
       </p>
     </div>
   );

@@ -4,12 +4,45 @@ import postgres from 'postgres';
  * Idempotent schema bootstrap. Run with `npm run db:migrate`.
  * For real deployments prefer `drizzle-kit generate` + versioned migrations;
  * this exists so the engine can be driven end-to-end with one command.
+ *
+ * `.trim()` normalises a value pasted into a CI secret. postgres.js happens to tolerate a trailing
+ * newline today (verified against postgres:16), so it is defensive rather than a fix; `||` rather
+ * than `??` is the part that matters, so a whitespace-only secret falls back to the local default
+ * instead of being sent as a connection string.
  */
 const url =
-  process.env.DATABASE_URL ??
+  process.env.DATABASE_URL?.trim() ||
   'postgres://postgres:postgres@localhost:5432/shogun_waitlist';
 
 const sql = postgres(url, { max: 1 });
+
+/**
+ * What the connection string actually parsed to, with the password removed.
+ *
+ * A failed migrate blocks the whole deploy, so the log has to answer "which of the five parts is
+ * wrong" without anyone having to reproduce it locally — and it has to do that without printing
+ * the credential into a public Actions log.
+ */
+function describeUrl(raw: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return 'DATABASE_URL is not a parseable URL (a raw `/ # ? %` in the password must be percent-encoded)';
+  }
+  const password = decodeURIComponent(u.password);
+  const placeholder = /^\[.*\]$/.test(password) ? ' — still the dashboard placeholder!' : '';
+  return [
+    `user=${u.username || '(none)'}`,
+    `host=${u.hostname}`,
+    `port=${u.port || '(default)'}`,
+    `database=${u.pathname.replace(/^\//, '') || '(none)'}`,
+    `password=${password ? `set${placeholder}` : '(EMPTY)'}`,
+    raw !== (process.env.DATABASE_URL ?? raw) ? 'note: surrounding whitespace was trimmed' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
 
 async function main() {
   await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto`;
@@ -130,8 +163,14 @@ async function main() {
       created_at             timestamptz NOT NULL DEFAULT now()
     )
   `;
+  // Additive: the claim capability that lets a Mac fetch its own key. Rollback =
+  // `ALTER TABLE licenses DROP COLUMN claim_nonce_hash, DROP COLUMN claim_expires_at;` — the
+  // manual key-entry path keeps working without them.
+  await sql`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS claim_nonce_hash text`;
+  await sql`ALTER TABLE licenses ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz`;
   await sql`CREATE INDEX IF NOT EXISTS licenses_subscription_idx ON licenses (stripe_subscription_id)`;
   await sql`CREATE INDEX IF NOT EXISTS licenses_customer_idx     ON licenses (stripe_customer_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS licenses_claim_idx        ON licenses (claim_nonce_hash)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS stripe_events (
@@ -141,14 +180,56 @@ async function main() {
     )
   `;
 
+  // Row Level Security on every table this file creates.
+  //
+  // Nothing here reaches the database through Supabase's PostgREST layer — `db/index.ts` opens a
+  // direct connection with postgres.js as a privileged role, and that role is not subject to RLS.
+  // So this changes nothing for the app. What it closes is the *other* door: Supabase grants the
+  // `anon` and `authenticated` roles access to public tables by default, and the anon key is
+  // meant to be public. `licenses` holds licence keys — bearer credentials — and `participants`
+  // holds email addresses.
+  //
+  // Enabled with **no policies**, which is deny-all for every role RLS applies to. That is the
+  // intended end state, not an unfinished one: there is no legitimate anon read of these tables,
+  // so a policy would be a hole rather than a fix. Supabase's advisor reports this as
+  // "RLS Enabled No Policy" — an informational note that assumes you meant to add policies.
+  //
+  // `ENABLE`, never `FORCE`: FORCE would subject the table owner to RLS too, and the app connects
+  // as a role that is very likely the owner. That would lock out the application itself.
+  //
+  // Rollback = `ALTER TABLE <t> DISABLE ROW LEVEL SECURITY;` per table. Nothing depends on RLS
+  // being on, so disabling it restores the previous behaviour exactly.
+  for (const table of [
+    'participants',
+    'rate_limits',
+    'points_ledger',
+    'x_follower_snapshot',
+    'x_quote_snapshot',
+    'billing_customers',
+    'subscriptions',
+    'licenses',
+    'stripe_events',
+  ]) {
+    await sql`ALTER TABLE ${sql(table)} ENABLE ROW LEVEL SECURITY`;
+  }
+
   console.log(
     'migrated: participants, rate_limits, points_ledger, x_follower_snapshot, x_quote_snapshot, ' +
-      'billing_customers, subscriptions, licenses, stripe_events',
+      'billing_customers, subscriptions, licenses, stripe_events (RLS enabled on all)',
   );
   await sql.end();
 }
 
 main().catch((err) => {
   console.error(err);
+  // 28P01 is the one failure that is never about the schema: the migration never ran, so the
+  // deploy that depends on it is blocked by a credential, not by a broken statement.
+  if ((err as { code?: string })?.code === '28P01') {
+    console.error(
+      `\nDATABASE_URL was rejected by the server. Parsed as: ${describeUrl(url)}\n` +
+        'Copy the Session pooler string from Supabase → Project Settings → Database, substitute ' +
+        'the real password, and re-set the secret with no trailing newline.',
+    );
+  }
   process.exit(1);
 });

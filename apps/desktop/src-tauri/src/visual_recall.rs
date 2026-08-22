@@ -198,12 +198,12 @@ pub mod mac {
         let _ = db.purge_screen_frames(current_retention_ms());
         let frame_stats = db.screen_frame_stats();
         let now_ms = db.now_ms();
-        let recent_frame_count = db.screen_frames_count_in_range(now_ms.saturating_sub(DAY_MS), now_ms);
+        let recent_frame_count =
+            db.screen_frames_count_in_range(now_ms.saturating_sub(DAY_MS), now_ms);
         let estimated_daily_bytes = (recent_frame_count >= 2)
             .then(|| db.screen_frame_bytes_in_range(now_ms.saturating_sub(DAY_MS), now_ms));
-        let projected_retention_bytes = estimated_daily_bytes.and_then(|bytes| {
-            bytes.checked_mul(i64::from(settings.retention.days()))
-        });
+        let projected_retention_bytes = estimated_daily_bytes
+            .and_then(|bytes| bytes.checked_mul(i64::from(settings.retention.days())));
         let recent = db
             .screen_ocr_previews(5, PREVIEW_CHARS)
             .into_iter()

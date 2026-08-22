@@ -1,0 +1,1359 @@
+/* excluded-app list (FR-MT-02b). Deliberately plain: it is a list of decisions the user already
+   made, and its only job is to let them be taken back. */
+.mexcl {
+  margin-top: 6px;
+}
+.mexcl__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.mexcl__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  background: transparent;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-radius: 0;
+}
+.mexcl__row:first-child {
+  border-top: none;
+  padding-top: 2px;
+}
+.mexcl__id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: color-mix(in srgb, var(--ink) 80%, var(--muted));
+}
+.mexcl__rm {
+  flex: none;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.mexcl__rm:hover {
+  color: var(--danger);
+}
+/* The secondary action on the offer: available, not competing with Start. */
+.mpill__btn--quiet {
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+/* meeting note (FR-MT-10) — during a meeting the panel is a place to type and nothing else. */
+.mnote {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 10px;
+}
+.mnote__area {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.mnote__area::placeholder {
+  color: var(--muted);
+}
+/* Quiet by design: saving is not an achievement to celebrate, it is a fact to be able to check. */
+.mnote__status {
+  flex: none;
+  height: 14px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-align: right;
+}
+
+/* ── meeting overlay (Issue #7) ────────────────────────────────────────────────────────────
+   Its own floating window, parked bottom-center above the Meet mic bar (Rust positions it).
+   Sized to the content and nothing more: it sits over someone's meeting, so every pixel it
+   takes is a pixel of the person they are talking to. */
+:root[data-window="meeting"],
+:root[data-window="meeting"] body,
+:root[data-window="meeting"] #root,
+:root[data-window="meeting-cc"],
+:root[data-window="meeting-cc"] body,
+:root[data-window="meeting-cc"] #root,
+:root[data-window="meeting-canvas"],
+:root[data-window="meeting-canvas"] body,
+:root[data-window="meeting-canvas"] #root,
+:root[data-window="meeting-chat"],
+:root[data-window="meeting-chat"] body,
+:root[data-window="meeting-chat"] #root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  /* Pass clicks through any transparent padding inside the fixed window frame. */
+  pointer-events: none;
+}
+/* Content panel windows stay transparent — glass lives on .ov__live / .ov__canvas / .ov__chat. */
+.ov {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 100%;
+  padding: 10px 12px 10px 0;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(34px) saturate(1.7);
+  backdrop-filter: blur(34px) saturate(1.7);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg, 14px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+  color: var(--ink);
+  font-family: var(--sys);
+  box-sizing: border-box;
+}
+/* Meeting detected offer — white pill card (reference screenshot; exact tokens).
+   Do NOT use `.ov` here: its glass/backdrop paints a full-rect compositor layer on transparent
+   WKWebView; CSS border-radius does not clip that layer, so --glass grey peeks at corners. */
+.ov-offer {
+  pointer-events: auto;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: #111111;
+  overflow: visible;
+}
+.ov-offer .ov__offer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 16px 16px 14px;
+  background: #ffffff;
+  border-radius: 16px;
+  overflow: hidden;
+  /* border-radius alone is not enough on transparent Tauri/WKWebView — clip the painted rect. */
+  clip-path: inset(0 round 16px);
+  -webkit-clip-path: inset(0 round 16px);
+  /* drop-shadow follows the clipped alpha; box-shadow leaves a rectangular halo at corners. */
+  filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.22));
+}
+.ov__offer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.ov__offer-left {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.ov__offer-accent {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  align-self: stretch;
+  margin: 0;
+  width: 4px;
+}
+.ov__offer-dot {
+  flex: none;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #2f6fed;
+}
+.ov__offer-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov__offer-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #111111;
+  letter-spacing: -0.01em;
+}
+.ov__offer-sub {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: #8a8a8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov__offer-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.ov__offer-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111111;
+  background: #f2f2f2;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease;
+  -webkit-appearance: none;
+  appearance: none;
+  overflow: hidden;
+  box-shadow: none;
+}
+.ov__offer-go:hover {
+  background: #e8e8e8;
+}
+.ov__offer-go:focus-visible {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
+}
+.ov__offer-ico {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  background: transparent;
+}
+.ov__offer-skip {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: #9a9a9a;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px 4px;
+  white-space: nowrap;
+}
+.ov__offer-skip:hover {
+  color: #555555;
+}
+.ov__offer-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  max-width: 100%;
+  background: #2f6fed;
+  border-radius: 0 2px 0 0;
+  pointer-events: none;
+  will-change: width;
+}
+/* Drag handle vs interactive controls — header drags; buttons/menus/scroll opt out. */
+.ov__drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+}
+.ov__drag:active {
+  cursor: grabbing;
+}
+.ov__nodrag,
+.ov__nodrag * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__grip:active {
+  cursor: grabbing;
+}
+.ov__kicker {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.ov__acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__go:hover {
+  background: var(--fill);
+}
+.ov__quiet:hover {
+  color: var(--ink);
+}
+.ov__note {
+  flex: 1.3;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 7px 12px;
+  outline: none;
+}
+.ov__note::placeholder {
+  color: var(--muted);
+}
+/* live in-meeting pane (issue #93) + black control capsule */
+.ov--live {
+  align-items: stretch;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 8px;
+  gap: 8px;
+  height: 100%;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.ov--live-desk .ov__float {
+  pointer-events: auto;
+}
+.ov--live-pill {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: flex-end;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  /* Top inset = tooltip height + gap so tips above the bar stay inside the webview. */
+  padding: 36px 8px 8px;
+  overflow: visible;
+  /* Transparent host — black capsule is only `.ov__bar` (no glass fill). */
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+.ov--live-pill .ov__bar-wrap {
+  pointer-events: auto;
+}
+/* Wrap = black pill only in flow. Grip is absolute — cannot push icons. */
+.ov__bar-wrap {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: max-content;
+  z-index: 6;
+}
+/* Dead-center on top edge; mostly above so it does not cover More/CC. */
+.ov__bar-wrap > .ov__bar-move {
+  position: absolute !important;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -70%);
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 36px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(28, 28, 30, 0.96);
+  color: #fff;
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  cursor: grab;
+  /* JS meeting_drag path — do not let CSS app-region steal the gesture. */
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  flex: none;
+  user-select: none;
+}
+.ov__bar-wrap > .ov__bar-move:active {
+  cursor: grabbing;
+}
+/* Once hover-gated, grip is hittable even while opacity 0 (sits above the pill). */
+.ov__bar-wrap.ov__bar--hover-ready > .ov__bar-move {
+  pointer-events: auto;
+}
+.ov__bar-wrap.ov__bar--hover-ready:hover > .ov__bar-move,
+.ov__bar-wrap > .ov__bar-move:active,
+.ov__bar-wrap > .ov__bar-move:focus-visible {
+  opacity: 1;
+}
+.ov__bar-wrap > .ov__bar-move .drag-handle-6dot__img,
+.ov__bar-wrap > .ov__bar-move img {
+  width: 14px;
+  height: 14px;
+  display: block;
+  pointer-events: none;
+  opacity: 1;
+}
+/* Independent panel window shell — transparent; glass is on the inner card only. */
+.ov-panel-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  box-sizing: border-box;
+}
+.ov--panel-solo {
+  justify-content: stretch;
+  align-items: stretch;
+  padding: 0;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  pointer-events: none;
+}
+.ov--panel-solo .ov__live,
+.ov--panel-solo .ov__canvas,
+.ov--panel-solo .ov__chat {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  pointer-events: auto;
+  border-radius: 18px;
+  /* Transparent WKWebView: border-radius alone does not clip backdrop-filter / box-shadow rect. */
+  clip-path: inset(0 round 18px);
+  -webkit-clip-path: inset(0 round 18px);
+  box-shadow: none;
+  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.4));
+}
+.ov__live {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px 14px;
+  background: rgba(6, 6, 8, 0.92);
+  -webkit-backdrop-filter: blur(40px) saturate(1.45);
+  backdrop-filter: blur(40px) saturate(1.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  overflow: hidden;
+  clip-path: inset(0 round 18px);
+  -webkit-clip-path: inset(0 round 18px);
+  box-shadow: none;
+  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.4));
+  color: #fff;
+}
+.ov__live.ov__float {
+  flex: none;
+}
+/* Black floating control capsule — matches in-meeting reference. */
+.ov__bar {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  align-self: center;
+  width: max-content;
+  min-width: max-content;
+  height: 52px;
+  min-height: 52px;
+  max-height: 52px;
+  padding: 6px 8px 6px 14px;
+  background: #000000;
+  border-radius: 999px;
+  border: none;
+  box-shadow: none;
+  overflow: visible;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__bar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  overflow: visible;
+}
+.ov__bar-slot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+.ov__bar-slot--more {
+  z-index: 5;
+}
+.ov__bar-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  padding: 5px 8px;
+  background: #000000;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  border-radius: 6px;
+  pointer-events: none;
+  box-shadow: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 100ms ease, visibility 100ms ease;
+  z-index: 20;
+}
+/* Hover-only after first pointer move (avoids false :hover when window spawns under cursor). */
+.ov__bar--hover-ready .ov__bar-slot:hover > .ov__bar-tip,
+.ov__bar-btn:focus-visible ~ .ov__bar-tip {
+  opacity: 1;
+  visibility: visible;
+}
+.ov__bar-slot--more:has(.ov__modemenu) > .ov__bar-tip {
+  opacity: 0;
+  visibility: hidden;
+}
+.ov__bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  color: #ffffff;
+  opacity: 0.92;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.ov__bar--hover-ready .ov__bar-btn:hover:not(.is-on) {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__bar-btn.is-on {
+  background: #3a3a3a;
+  opacity: 1;
+}
+.ov__bar-ico {
+  width: 20px;
+  height: 20px;
+  display: block;
+  pointer-events: none;
+  object-fit: contain;
+}
+.ov__bar-div {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.28);
+  flex: none;
+}
+.ov__wave {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  flex: none;
+  color: #fff;
+  opacity: 0.92;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.ov__wave:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__wave:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 1px;
+}
+.ov__wave-glyph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition:
+    opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ov__wave-glyph--bars {
+  gap: 2px;
+  opacity: 1;
+  transform: scale(0.92);
+}
+.ov__wave.is-paused .ov__wave-glyph--bars {
+  opacity: 0;
+  transform: scale(0.55);
+}
+.ov__wave-glyph--play {
+  opacity: 0;
+  transform: scale(0.55);
+}
+.ov__wave.is-paused .ov__wave-glyph--play {
+  opacity: 1;
+  transform: scale(1);
+}
+.ov__wave-bar {
+  display: block;
+  width: 2.5px;
+  height: var(--h, 40%);
+  min-height: 4px;
+  max-height: 16px;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: center;
+  transition:
+    height 90ms linear,
+    opacity 220ms ease,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(1) {
+  animation: ov-wave-idle 1.15s ease-in-out infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(2) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.12s infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(3) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.24s infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(4) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.08s infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(5) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.2s infinite;
+}
+.ov__wave.is-paused .ov__wave-bar {
+  height: 22%;
+  opacity: 0;
+  transform: scaleY(0.35);
+  animation: none;
+}
+.ov__wave-play {
+  display: block;
+  width: 21px;
+  height: 21px;
+  margin-left: 1.5px;
+  filter: drop-shadow(0 0 0.25px rgba(255, 255, 255, 0.35));
+}
+@keyframes ov-wave-idle {
+  0%,
+  100% {
+    transform: scaleY(0.82);
+  }
+  50% {
+    transform: scaleY(1.12);
+  }
+}
+.ov__bar-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  flex: none;
+}
+.ov__bar-stop:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.ov__bar-stop-ico {
+  width: 36px;
+  height: 36px;
+  display: block;
+  pointer-events: none;
+}
+.ov__modemenu--bar {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 200px;
+}
+.ov__modemenu--bar .ov__langrow--menu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.ov__livehead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: none;
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+}
+.ov__livehead-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  min-width: 0;
+}
+.ov__live-grip {
+  justify-self: center;
+}
+.ov__liveacts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: end;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: 0;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__modepick,
+.ov__langpick {
+  position: relative;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__langrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__modebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 7px;
+  padding: 0 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.ov__modebtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+.ov__modebtn[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+.ov__chev {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.75;
+}
+.ov__modemenu,
+.ov__langmenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  padding: 4px;
+  background: rgba(8, 8, 10, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+}
+.ov__modeopt,
+.ov__langopt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 26px;
+  box-sizing: border-box;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.88);
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+.ov__modeopt:hover,
+.ov__langopt:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.ov__modeopt.is-on,
+.ov__langopt.is-on {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+.ov__mode-check,
+.ov__mode-check-spacer {
+  width: 14px;
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+}
+.ov__mode-check {
+  color: rgba(255, 255, 255, 0.9);
+}
+.ov__mode-check-spacer {
+  visibility: hidden;
+}
+.ov__langbtn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: #ffffff;
+  background: none;
+  border: none;
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.42);
+  padding: 2px 1px 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov__langbtn:hover {
+  border-bottom-color: rgba(255, 255, 255, 0.7);
+}
+.ov__langbtn--auto {
+  border-bottom-style: dotted;
+  border-bottom-width: 1.5px;
+  color: rgba(255, 255, 255, 0.78);
+}
+.ov__langarrow {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+  flex: none;
+  padding: 0 2px;
+}
+.ov__iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font: inherit;
+  color: #ffffff;
+  background: none;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  opacity: 0.78;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.ov__iconbtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  opacity: 1;
+}
+.ov__iconbtn.is-on {
+  background: rgba(255, 255, 255, 0.12);
+  opacity: 1;
+}
+.ov__icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.ov__livebody {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 14px 6px 10px 4px;
+  margin-top: 2px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Scrollable transcript / translation — no visible scrollbar. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ov__livebody::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.ov__liveempty {
+  margin: 0;
+  padding: 28px 12px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.38);
+}
+.ov__stop--live:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* recap — match AI Canvas dark glass, not the old translucent pill */
+.ov--recap {
+  flex-direction: column;
+  justify-content: stretch;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+}
+.ov__recap {
+  flex: 1;
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  box-sizing: border-box;
+  padding: 14px 14px 12px;
+  background: rgba(12, 12, 14, 0.88);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  overflow: hidden;
+  clip-path: inset(0 round 18px);
+  -webkit-clip-path: inset(0 round 18px);
+  color: #fff;
+  filter: drop-shadow(0 18px 36px rgba(0, 0, 0, 0.4));
+}
+.ov__rhead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ov__rhead-main {
+  min-width: 0;
+  flex: 1;
+  cursor: grab;
+}
+.ov__rkicker {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 3px;
+}
+.ov__rtitle {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #fff;
+}
+.ov__rhead-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding-top: 2px;
+}
+.ov__rmin {
+  flex: none;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  font-variant-numeric: tabular-nums;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.ov__rbody {
+  flex: 1;
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Match .ov__livebody / canvas-body / chat-body — scroll, no visible bar. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ov__rbody::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.ov__rfoot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__rdone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  font-family: var(--sys);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 11px 14px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.ov__rdone:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.ov__rdone:active {
+  transform: scale(0.985);
+  background: rgba(255, 255, 255, 0.12);
+}
+.ov__rnotes {
+  margin: 0;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.88);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ov__rempty {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.ov__disclosure,
+.ov__disclosure {
+  margin: 0;
+  padding: 2px 0 0;
+  max-width: 100%;
+}
+.ov__minutes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.ov__minutes--lead {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.ov__mstatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.ov__mstatus-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6ea8ff;
+  box-shadow: 0 0 0 0 rgba(110, 168, 255, 0.55);
+  animation: ov-mstatus-pulse 1.4s ease-out infinite;
+  flex: none;
+}
+@keyframes ov-mstatus-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(110, 168, 255, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(110, 168, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(110, 168, 255, 0);
+  }
+}
+.ov__mpending,
+.ov__mdegraded {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.55);
+}
+.ov__mdegraded {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.65);
+}
+.ov__mdegraded--warn {
+  color: #e6c35c;
+  background: rgba(201, 162, 39, 0.12);
+  border: 1px solid rgba(201, 162, 39, 0.35);
+}
+.ov__notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.ov__tsec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.ov__tturns {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.ov__tturn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+.ov__tmeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ov__tspeaker {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__ttime {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+.ov__ttext {
+  margin: 0;
+  width: 100%;
+  min-width: 0;
+  font-family: var(--sys);
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  color: rgba(255, 255, 255, 0.86);
+  word-break: break-word;
+}
+.ov__tempty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.4);
+}
+.ov__msec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ov__msec--summary {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(255, 255, 255, 0.035) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.ov__mhead {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ov__msummary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.92);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.ov__mlist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.88);
+}
+.ov__mlist li {
+  position: relative;
+  padding-left: 14px;
+  word-break: break-word;
+}
+.ov__mlist li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+}
+.ov__mlist--actions li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.ov__maction {
+  flex: 1;
+  min-width: 0;
+}

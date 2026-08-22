@@ -58,7 +58,30 @@ const nextConfig = {
             // Next.js needs inline bootstrap scripts/styles. Every other
             // resource type is restricted to this origin or the two explicit
             // logo providers used by the LP.
-            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://img.logo.dev https://cdn.brandfetch.io; font-src 'self' data:; connect-src 'self'; frame-src 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests",
+            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://img.logo.dev https://cdn.brandfetch.io https://api.producthunt.com; font-src 'self' data:; connect-src 'self'; frame-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests",
+          },
+        ],
+      },
+      {
+        // The app demo is a document we frame into the features page, so the
+        // deny-everything defaults above are narrowed for it: same-origin
+        // ancestors only, and still no framing *from* it.
+        //
+        // The demo is linked as /app-demo/index.html rather than /app-demo/: the
+        // directory form 308s under `next start` and 307s on Cloudflare, and only
+        // the explicit file resolves in both.
+        //
+        // Note this only binds where Next serves the response. On Cloudflare the
+        // file is served straight from static assets and arrives with neither
+        // header — so in production the demo is framable by any origin. That is
+        // acceptable for what it is (a static page of sample data, no auth, no
+        // form, no action) but it is not the guarantee this block reads like.
+        source: '/app-demo/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+          {
+            key: 'Content-Security-Policy',
+            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'none'",
           },
         ],
       },

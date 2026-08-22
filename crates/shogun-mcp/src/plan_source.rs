@@ -318,4 +318,113 @@ mod tests {
         let plan = resolve_plan(stamp, state);
         assert_eq!(entitlements(plan, now).status, PlanStatus::Pro);
     }
+
+    const DAY_MS: u64 = 24 * 3600 * 1000;
+
+    /// Mint a token the way the licence API does, so the journey below exercises the real
+    /// verifier rather than a hand-built `BillingState`.
+    fn mint_token(
+        signing: &ed25519_dalek::SigningKey,
+        device: &str,
+        plan: &str,
+        status: &str,
+        iat_secs: i64,
+        exp_secs: i64,
+    ) -> String {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+        use ed25519_dalek::Signer;
+
+        let body = serde_json::json!({
+            "v": 1, "lic": "lic-journey", "plan": plan, "status": status, "device": device,
+            "iat": iat_secs, "exp": exp_secs, "period_end": 2_000_000_000i64,
+            "cancel_at_period_end": false, "grace_days": 14,
+        })
+        .to_string();
+        format!(
+            "v1.{}.{}",
+            URL_SAFE_NO_PAD.encode(body.as_bytes()),
+            URL_SAFE_NO_PAD.encode(signing.sign(body.as_bytes()).to_bytes())
+        )
+    }
+
+    /// 要件 §6.12 受け入れ基準: トライアル満了 → 課金 → 復元, walked as one timeline on a mocked
+    /// clock, through the real seam — signed token → `verify` → `billing_state` → `resolve_plan`
+    /// → `entitlements`.
+    ///
+    /// Each crate tests its own half; nothing tested the composition, which is where a plan gate
+    /// actually fails. It also pins two things the separate tests cannot see together: buying
+    /// **Standard** restores Standard and not the Pro-equivalent trial the user just lost, and
+    /// local capture and search survive every single step (least-destructive posture — never
+    /// punch holes in year-scale memory).
+    #[test]
+    fn trial_expiry_then_purchase_then_restore_across_the_whole_seam() {
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        let key = signing.verifying_key().to_bytes();
+        let device = "dev-journey";
+        let trial_start_ms = 0u64;
+        let stamp = Some(trial_start_ms);
+
+        // Day 3 — trialing, everything unlocked.
+        let day3 = entitlements(resolve_plan(stamp, BillingState::Unknown), 3 * DAY_MS);
+        assert_eq!(day3.status, PlanStatus::Trial);
+        assert!(day3.agent_execution && day3.memory_api);
+
+        // Day 8 — the trial is over and the paid surfaces are shut.
+        let expired_at = trial_start_ms + TRIAL_DURATION_MS + DAY_MS;
+        let expired = entitlements(resolve_plan(stamp, BillingState::Unknown), expired_at);
+        assert_eq!(expired.status, PlanStatus::TrialExpired);
+        assert!(!expired.first_layer_reads && !expired.agent_execution && !expired.memory_api);
+
+        // Day 8, minutes later — they buy Standard. The signed token is the whole restore path.
+        let bought_at_secs = (expired_at / 1000) as i64;
+        let token = mint_token(
+            &signing,
+            device,
+            "standard",
+            "active",
+            bought_at_secs,
+            bought_at_secs + 26 * 3600,
+        );
+        let paid = shogun_license::billing_state_from_token(&token, &key, device, expired_at);
+        assert_eq!(paid, BillingState::Active(PaidPlan::Standard));
+
+        let restored = entitlements(resolve_plan(stamp, paid), expired_at);
+        assert_eq!(restored.status, PlanStatus::Standard, "restored within the same instant");
+        assert!(restored.first_layer_reads && restored.background_intelligence);
+        assert!(
+            !restored.agent_execution && !restored.memory_api && !restored.composio_send_unlock,
+            "buying Standard restores Standard — not the Pro-equivalent trial they just lost"
+        );
+
+        // Offline on the paid plan (FR-BIL-09): full access through the grace window, amber from
+        // day 7, and only then back to the expired posture. The trial stamp is long gone, so this
+        // also proves the fallback is the locked state and not a second trial.
+        for (days_offline, want_paid) in [(1u64, true), (6, true), (7, true), (13, true), (14, false)] {
+            let now = expired_at + days_offline * DAY_MS;
+            let state = shogun_license::billing_state_from_token(&token, &key, device, now);
+            let e = entitlements(resolve_plan(stamp, state), now);
+            if want_paid {
+                assert_eq!(e.status, PlanStatus::Standard, "day {days_offline} offline still paid");
+            } else {
+                assert_eq!(e.status, PlanStatus::TrialExpired, "day {days_offline} past the window");
+                assert!(!e.first_layer_reads, "past the window the paid surfaces close");
+            }
+            assert!(e.local_capture && e.local_search, "day {days_offline}: local never closes");
+        }
+
+        // Cancelling is the same shape: the API stops issuing, so the last token simply ages out
+        // — which the day-14 row above already walks. What matters is where it lands, and that a
+        // wiped onboarding stamp cannot turn a lapsed subscription back into a fresh trial.
+        let after = expired_at + 20 * DAY_MS;
+        let aged = shogun_license::billing_state_from_token(&token, &key, device, after);
+        assert_eq!(aged, BillingState::Lapsed, "an aged-out token is lapsed, never Unknown");
+        let no_stamp = entitlements(resolve_plan(None, aged), after);
+        assert_eq!(
+            no_stamp.status,
+            PlanStatus::TrialExpired,
+            "deleting onboarding.json must not re-grant a trial to a lapsed account"
+        );
+        assert!(no_stamp.local_capture && no_stamp.local_search);
+    }
 }

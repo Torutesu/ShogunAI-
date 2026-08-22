@@ -41,3 +41,5 @@ pub mod tool_catalog;
 pub mod tool_loop;
 /// Visual recall structured API helpers (Memory API symmetry).
 pub mod visual_recall_api;
+/// Closed, typed CRUD contract for private voice dictionary records.
+pub mod voice_dictionary_api;

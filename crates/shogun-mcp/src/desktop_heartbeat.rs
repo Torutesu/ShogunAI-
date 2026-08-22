@@ -44,14 +44,35 @@ pub fn write(path: &Path, now_ms: u64) -> Result<(), String> {
     Ok(())
 }
 pub fn fresh(path: &Path, now_ms: u64) -> bool {
+    // A stamp in the future is NOT fresh: saturating_sub would clamp its age to 0 forever, so a
+    // backwards clock step (NTP, VM resume) after the desktop quit would authorize L3 enqueues
+    // indefinitely. A stale-or-bogus marker never authorizes a send.
     fs::read_to_string(path)
         .ok()
         .and_then(|text| text.trim().parse::<u64>().ok())
-        .is_some_and(|stamp| now_ms.saturating_sub(stamp) <= MAX_AGE_MS)
+        .is_some_and(|stamp| stamp <= now_ms && now_ms - stamp <= MAX_AGE_MS)
 }
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_future_stamp_is_never_fresh() {
+        let dir = std::env::temp_dir().join(format!("shogun-hb-test-{}", std::process::id()));
+        let path = dir.join(FILE_NAME);
+        write(&path, 10_000).expect("write heartbeat");
+        assert!(fresh(&path, 10_000), "own instant is fresh");
+        assert!(fresh(&path, 10_000 + MAX_AGE_MS), "age limit inclusive");
+        assert!(!fresh(&path, 10_000 + MAX_AGE_MS + 1), "past the limit is stale");
+        // The clock stepped backwards past the stamp: the marker must not read as alive.
+        assert!(!fresh(&path, 9_999), "a future stamp never authorizes");
+        let _ = fs::remove_dir_all(dir);
+    }
 }

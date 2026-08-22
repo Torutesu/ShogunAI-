@@ -366,7 +366,7 @@ fn schedule_end_failsafe(app: AppHandle) {
         .name("voice-end-failsafe".into())
         .spawn(move || {
             std::thread::sleep(END_FAILSAFE);
-            if crate::voice_session::mac::force_end_if_recording(app) {
+            if crate::voice_session::mac::lifecycle::force_end_if_recording(app) {
                 eprintln!(
                     "[voice] end failsafe — still recording {}ms after release",
                     END_FAILSAFE.as_millis()
@@ -387,7 +387,7 @@ fn worker_loop(rx: Receiver<Cmd>) {
         };
         match rx.recv_timeout(wait) {
             Ok(Cmd::Start(app)) => {
-                let started = crate::voice_session::mac::on_hold_start(app.clone());
+                let started = crate::voice_session::mac::lifecycle::on_hold_start(app.clone());
                 if started {
                     hold_started = Some(Instant::now());
                     timeout_app = Some(app);
@@ -401,7 +401,7 @@ fn worker_loop(rx: Receiver<Cmd>) {
             Ok(Cmd::End(app)) => {
                 hold_started = None;
                 timeout_app = None;
-                crate::voice_session::mac::on_hold_end(app.clone());
+                crate::voice_session::mac::lifecycle::on_hold_end(app.clone());
                 schedule_end_failsafe(app);
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -417,7 +417,7 @@ fn worker_loop(rx: Receiver<Cmd>) {
                             hold_started = None;
                             let app = app.clone();
                             timeout_app = None;
-                            crate::voice_session::mac::on_hold_end(app.clone());
+                            crate::voice_session::mac::lifecycle::on_hold_end(app.clone());
                             schedule_end_failsafe(app);
                             continue;
                         }
@@ -427,7 +427,7 @@ fn worker_loop(rx: Receiver<Cmd>) {
                         hold_started = None;
                         let app = app.clone();
                         timeout_app = None;
-                        crate::voice_session::mac::on_hold_end(app.clone());
+                        crate::voice_session::mac::lifecycle::on_hold_end(app.clone());
                         schedule_end_failsafe(app);
                     }
                 }

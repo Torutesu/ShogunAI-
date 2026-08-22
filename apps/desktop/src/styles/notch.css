@@ -1,0 +1,1085 @@
+/* Idle: center-weld under the physical notch (playbook §5 / P1). Not left-aligned glass. */
+.notch-shell.is-idle,
+.notch-shell.is-hoverintent,
+.notch-shell.is-expanding,
+.notch-shell.is-collapsing {
+  align-items: center;
+  justify-content: flex-start;
+}
+.notch-shell.is-expanded {
+  align-items: stretch;
+  --r-shell-bot: var(--r-exp-bot);
+}
+.notch-shell.is-idle,
+.notch-shell.is-hoverintent,
+.notch-shell.is-expanding {
+  --r-shell-bot: var(--r-idle-bot);
+}
+.notch-shell.is-collapsing {
+  --r-shell-bot: var(--r-idle-bot);
+}
+
+/* Idle chin face — flush to webview top (y=0), centered under hardware notch. */
+.notch-idle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0;
+  height: var(--chin-h);
+  flex: none;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  width: 100%;
+  z-index: 2;
+}
+
+/* collapsed handle — welded opaque #000 chin; top square, bottom radius 8.
+   Dead band under hardware cutout; labels/icons only in the drop row below. */
+.handle {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  width: 180px;
+  /* Match hardware/pseudo notch (~180). Wider Idle hung outside the cutout into menu-bar air. */
+  min-width: 180px;
+  max-width: 180px;
+  height: var(--chin-h);
+  min-height: var(--chin-h);
+  max-height: var(--chin-h);
+  margin: 0;
+  padding: 0 8px;
+  background: var(--chin);
+  border: none;
+  border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
+  box-shadow: none;
+  color: var(--chin-ink);
+  font: inherit;
+  font-family: var(--sys);
+  /* The notch stays docked; click opens the panel. */
+  cursor: pointer;
+  text-align: left;
+  box-sizing: border-box;
+}
+.handle__dead {
+  display: block;
+  flex: none;
+  height: var(--notch-dead-h);
+  min-height: var(--notch-dead-h);
+  pointer-events: none;
+}
+.handle__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--chin-row-h);
+  min-height: var(--chin-row-h);
+  max-height: var(--chin-row-h);
+  /* Do not min-width:0 — that let the column chin collapse under a shrinking NSPanel. */
+  min-width: min-content;
+  width: 100%;
+}
+.handle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--chin);
+  pointer-events: none;
+}
+.handle:hover {
+  background: var(--chin);
+}
+/* Quiet welded Idle — hardware-notch-sized black only; no "reading …" chrome.
+   Hover under notch still expands via Rust R_enter (panel size independent). */
+.handle--hiding {
+  min-width: 180px;
+  max-width: 180px;
+  width: 180px;
+  height: var(--notch-dead-h);
+  min-height: var(--notch-dead-h);
+  max-height: var(--notch-dead-h);
+  padding: 0;
+  cursor: default;
+}
+.handle--hiding .handle__dead {
+  height: 100%;
+  min-height: 100%;
+}
+.handle__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--chin-muted);
+  min-width: 0;
+  flex: 1;
+}
+.handle__live b {
+  color: var(--chin-ink);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Daily-summary greeting (issue #10): the confirmed mark + "Good morning", announced by a soft
+   brand glow under the chin — presence, not alarm. The mark's LP blue is lifted one step for
+   dark glass (#004CFC reads black at 13px on #000). */
+.handle--summary {
+  box-shadow: 0 6px 24px rgba(47, 104, 255, 0.4), inset 0 -1px 0 rgba(47, 104, 255, 0.35);
+}
+.handle__greet {
+  color: var(--chin-ink);
+  font-weight: 600;
+}
+.handle__greetmark {
+  width: 20px;
+  height: 13px;
+  flex: none;
+  color: #2f68ff;
+}
+/* open panel — weld under notch + themed body; bottom radius 16; no native/CSS float shadow */
+.panel {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Shell fill; chin band (::before) stays welded black; body uses --glass via ::after. */
+  background: var(--shell);
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
+  box-shadow: none;
+  overflow: hidden;
+  transform-origin: top center;
+  transition:
+    transform var(--notch-open),
+    border-radius var(--notch-open);
+}
+/* Settings: solid shell only — no translucent glass sheet over transparent window. */
+.panel--settings {
+  background: var(--shell);
+}
+.panel--settings::after,
+.notch-shell.is-expanded .panel--settings::after,
+.notch-shell.is-expanding .panel--settings::after,
+.notch-shell.is-collapsing .panel--settings::after {
+  background: var(--shell);
+  opacity: 1;
+  transition: none;
+}
+/* Always fill the fixed webview frame — never flip position absolute↔flex mid-morph. */
+.notch-shell .panel {
+  position: absolute;
+  inset: 0;
+  flex: none;
+}
+/* Body fill below the chin band (notch rectangle stays welded black). Opaque — no blur (janks nested scroll). */
+.panel::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--chin-h);
+  bottom: 0;
+  background: var(--glass);
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
+  opacity: 0;
+  transition: opacity var(--notch-content);
+}
+.notch-shell.is-expanded .panel::after {
+  opacity: 1;
+  transition-delay: 24ms;
+}
+/* Blur is expensive under scale — keep morph paint opaque only. */
+.notch-shell.is-expanding .panel::after,
+.notch-shell.is-collapsing .panel::after,
+.notch-shell.is-idle .panel::after,
+.notch-shell.is-hoverintent .panel::after {
+  opacity: 0;
+  transition: none;
+}
+.panel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--chin-h);
+  background: var(--chin);
+  z-index: 1;
+  pointer-events: none;
+}
+.panel__body {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  transform-origin: top center;
+}
+/* Pre-mounted Expanded: paint-hidden Idle, paint-ready for T2 class flip.
+   visibility:hidden (not just opacity) so a compositor glitch can't show a second chin. */
+.notch-shell.is-idle .panel,
+.notch-shell.is-hoverintent .panel {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(var(--shell-sx), var(--shell-sy));
+  transition: none;
+}
+/* Morph start pose: full frame, opaque black chin-scale shell, no Idle face (one shape). */
+.notch-shell.is-expanding .panel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+  transform: scale(var(--shell-sx), var(--shell-sy));
+  border-radius: 0 0 var(--r-idle-bot) var(--r-idle-bot);
+  /* Keep transition armed — next frame only changes transform target (is-expanded). */
+  transition:
+    transform var(--notch-open),
+    border-radius var(--notch-open);
+  will-change: transform;
+}
+.notch-shell.is-expanded .panel {
+  opacity: 1;
+  visibility: visible;
+  transform: scale(1, 1);
+  pointer-events: auto;
+  animation: none;
+}
+.notch-shell.is-collapsing .panel {
+  /* Stay opaque — reverse morph into chin, never fade-pop away. */
+  opacity: 1;
+  visibility: visible;
+  transform: scale(var(--shell-sx), var(--shell-sy));
+  pointer-events: none;
+  border-radius: 0 0 var(--r-idle-bot) var(--r-idle-bot);
+  transition:
+    transform var(--notch-close),
+    border-radius var(--notch-close);
+  will-change: transform;
+}
+.notch-shell.is-expanded .panel__body {
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    opacity var(--notch-content),
+    transform var(--notch-content);
+  transition-delay: 16ms;
+}
+.notch-shell.is-idle .panel__body,
+.notch-shell.is-hoverintent .panel__body,
+.notch-shell.is-expanding .panel__body {
+  opacity: 0;
+  transform: scale(0.92);
+  transition: none;
+}
+.notch-shell.is-collapsing .panel__body {
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 48ms ease-out,
+    transform 48ms ease-out;
+}
+/* Fallback when shell classes absent (dev / first paint): keep prior unfurl, clipped to SLO. */
+@keyframes panel-unfurl {
+  from {
+    opacity: 0;
+    transform: scale(0.96, 0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1, 1);
+  }
+}
+.stage:not(.notch-shell) .panel {
+  animation: panel-unfurl var(--notch-open) both;
+  transform-origin: top center;
+}
+
+.live__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--live) 65%, transparent);
+  flex: none;
+  animation: live-pulse 2.4s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* header — height locked to Idle chin so open reads as chin stretch, not new window.
+   Content sits in the drop row below the hardware cutout (same as Idle handle). */
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--chin-h);
+  min-height: var(--chin-h);
+  max-height: var(--chin-h);
+  /* Left padding kept tight so the live-source chip lands close to where the collapsed pill sits,
+     i.e. the indicator barely moves when the panel opens. Bottom pad lifts icons off the hairline. */
+  padding: var(--notch-dead-h) 9px 4px;
+  /* Dead band = welded black; drop row matches expanded body (--shell). */
+  background: linear-gradient(
+    to bottom,
+    var(--chin) 0,
+    var(--chin) var(--notch-dead-h),
+    var(--shell) var(--notch-dead-h)
+  );
+  border-bottom: 1px solid var(--line);
+  cursor: default;
+  box-sizing: border-box;
+}
+:root[data-appearance="light"] .head {
+  background: var(--shell);
+}
+@media (prefers-color-scheme: light) {
+  :root[data-appearance="auto"] .head {
+    background: var(--shell);
+  }
+}
+/* interactive children must not show the grab cursor */
+.head .chip,
+.head .icon {
+  cursor: pointer;
+}
+.head__left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.head__right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.head__divider {
+  flex: none;
+  width: 1px;
+  height: 13px;
+  margin: 0 2px;
+  background: var(--line-strong);
+}
+.head__divider {
+  flex: none;
+  width: 1px;
+  height: 13px;
+  margin: 0 2px;
+  background: var(--line-strong);
+}
+.chip {
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-xs);
+  border-radius: var(--r-pill);
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--notch-hover), color var(--notch-hover), border-color var(--notch-hover);
+}
+.chip:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
+}
+.chip[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--fill-strong);
+}
+.icon {
+  position: relative; /* anchors the approvals badge */
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: none;
+  background: var(--fill-strong);
+  color: var(--muted);
+  border-radius: 50%;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background var(--notch-hover), color var(--notch-hover);
+}
+/* Pending L3 sends on the settings gear (B-1). Warn-toned: these wait for the user. */
+.icon__badge {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  background: var(--warn);
+  color: var(--accent-ink);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.icon:hover {
+  background: color-mix(in srgb, var(--fill-strong) 72%, var(--ink));
+  color: var(--ink);
+}
+/* An active toggle has to read as "on" at a glance — this one changes how the panel behaves, so
+   leaving it to a tooltip would hide the difference between two very different modes. */
+.icon--on {
+  background: color-mix(in srgb, var(--accent) 24%, var(--fill-strong));
+  color: var(--accent);
+}
+.icon--on:hover {
+  background: color-mix(in srgb, var(--accent) 30%, var(--fill-strong));
+  color: var(--accent);
+}
+.icon svg {
+  display: block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transition: transform var(--notch-hover);
+}
+
+/* state list */
+.state {
+  flex: none;
+  max-height: 108px;
+  overflow-y: auto;
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.state__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 6px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: background var(--sp);
+  /* Rows settle in one after another when the list opens, so a long list reads as arriving
+     rather than snapping into place. Capped at 4 — past that the tail feels sluggish. */
+  animation: row-in 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.state__row:nth-child(2) {
+  animation-delay: 40ms;
+}
+.state__row:nth-child(3) {
+  animation-delay: 80ms;
+}
+.state__row:nth-child(n + 4) {
+  animation-delay: 120ms;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.state__row:hover {
+  background: var(--fill);
+}
+.state__check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  align-self: center;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  color: var(--faint);
+  opacity: 0.5;
+  font-size: 10px;
+  line-height: 1;
+  transition: background var(--sp), color var(--sp), opacity var(--sp);
+}
+.state__row:hover .state__check {
+  color: var(--ink);
+  opacity: 1;
+  background: var(--fill-strong);
+}
+.state__text {
+  font-size: var(--fs-md);
+  color: var(--ink);
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.state__empty {
+  font-size: var(--fs-sm);
+  color: var(--faint);
+  padding: 8px 8px;
+}
+.state__meta {
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  flex: none;
+}
+.state__meta.is-over {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* chat thread */
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+.welcome {
+  margin: auto 0;
+  max-width: 46ch;
+}
+.welcome__t {
+  font-size: var(--fs-xl);
+  font-weight: 640;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.welcome__s {
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--muted);
+}
+.welcome__key {
+  margin-top: 12px;
+  font-size: var(--fs-sm);
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+  border-radius: var(--r-sm);
+  padding: 8px 11px;
+}
+.msg {
+  max-width: 86%;
+  padding: 6px 9px;
+  border-radius: var(--r-lg);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  /* Answers are worth copying — let the user select message text (the rest of the panel chrome
+     stays user-select:none from body). */
+  user-select: text;
+  -webkit-user-select: text;
+  animation: msg-in 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.msg--me {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-bottom-right-radius: var(--r-xs);
+  font-weight: 500;
+}
+.msg--shogun {
+  align-self: flex-start;
+  background: var(--fill);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: var(--r-xs);
+}
+.msg--think {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 13px 14px;
+}
+.think__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+  animation: think-bounce 1.2s ease-in-out infinite;
+}
+.think__dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.think__dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes think-bounce {
+  0%,
+  70%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* The answer while it is still being written. No entry animation: msg-in would replay on every
+   token and leave the text permanently sliding. */
+.msg--live {
+  animation: none;
+}
+/* A caret on the last character, so a pause between tokens still reads as "writing" rather than
+   as "finished". It sits inline, which means it follows the text instead of being parked in a
+   corner of the bubble. */
+.msg__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+@keyframes caret-blink {
+  to {
+    visibility: hidden;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg__caret {
+    animation: none;
+  }
+}
+/* context actions (B-1) — up to four gated buttons directly above the composer. */
+.acts {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px 0;
+}
+.acts__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  border-radius: var(--r-pill);
+  padding: 4px 10px 4px 5px;
+  cursor: pointer;
+  transition: background var(--sp), border-color var(--sp);
+  animation: row-in 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.acts__btn:nth-child(2) { animation-delay: 40ms; }
+.acts__btn:nth-child(3) { animation-delay: 80ms; }
+.acts__btn:nth-child(n + 4) { animation-delay: 120ms; }
+.acts__btn:hover:not(:disabled) {
+  background: var(--fill-strong);
+  border-color: var(--line-strong);
+}
+.acts__btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* The permission tag: L1 runs on its own, L2 asks once, L3 waits in Approvals. */
+.acts__lvl {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 5px;
+  border-radius: var(--r-pill);
+  background: var(--fill-strong);
+  color: var(--faint);
+}
+.acts__lvl--l1 { color: var(--live); }
+.acts__lvl--l2 { color: var(--accent); }
+.acts__lvl--l3 { color: var(--warn); }
+.acts__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acts__note {
+  width: 100%;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.acts__note--ok { color: var(--live); }
+.acts__note--warn { color: var(--warn); }
+/* L2 one-tap confirm chip — replaces the row until answered or dismissed. */
+.acts__confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.acts__confirmq {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.acts__confirmq b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.acts__go,
+.acts__cancel {
+  flex: none;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  border-radius: var(--r-pill);
+  padding: 3px 11px;
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp), border-color var(--sp);
+}
+.acts__go {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.acts__go:hover {
+  background: color-mix(in srgb, var(--accent) 86%, var(--ink));
+}
+.acts__cancel:hover {
+  background: var(--fill-strong);
+}
+
+/* in-panel memory search (B-6) — a slim bar under the header, results as rows. */
+.search {
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.search__input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-md);
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+  outline: none;
+  transition: border-color var(--sp), box-shadow var(--sp);
+}
+.search__input:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.search__input::placeholder {
+  color: var(--faint);
+}
+.search__results {
+  max-height: 168px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.search__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: background var(--sp);
+}
+.search__row:hover {
+  background: var(--fill);
+}
+.search__excerpt {
+  min-width: 0;
+  flex: 1;
+  font-size: var(--fs-md);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search__excerpt b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.search__meta {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.search__empty,
+.search__hintline {
+  margin-top: 5px;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  padding: 0 2px;
+}
+/* A store failure, not an empty result (issue #121): it has to read differently from
+   "no matches", or the distinction the command now makes dies at the last pixel. */
+.search__empty.is-warn {
+  color: var(--warn);
+}
+
+/* composer — a rounded input card: source chip on top, field, then a bar with the model pill
+   (left) and draft/send tools (right). */
+.composer {
+  flex: none;
+  /* The bottom padding clears the corner resize grip: without it the grip sits on top of the send
+     button's corner and a click there starts a resize instead of sending. */
+  padding: 6px 9px 14px;
+  border-top: 1px solid var(--line);
+}
+.composer__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 5px 8px 5px;
+  transition: border-color var(--sp), box-shadow var(--sp);
+}
+.composer__card:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.srcchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  background: var(--fill-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 4px 11px;
+}
+.srcchip b {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer__input {
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 2px 2px 0;
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-lg);
+  outline: none;
+}
+.composer__input::placeholder {
+  color: var(--faint);
+}
+
+.scribe-float {
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  background: transparent;
+}
+.scribe-float__field {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 14px;
+  border: none;
+  border-radius: 18px;
+  background: var(--shell);
+}
+.scribe-float__field.is-error {
+  background: color-mix(in srgb, var(--danger) 8%, var(--shell));
+}
+.scribe-float__input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-lg);
+}
+.scribe-float__input::placeholder { color: rgba(255, 255, 255, 0.28); }
+:root[data-appearance="light"] .scribe-float__input::placeholder { color: rgba(0, 0, 0, 0.32); }
+.scribe-float__submit {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--fill-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+.scribe-float__submit:not(:disabled):hover { background: var(--accent); color: var(--accent-ink); }
+.scribe-float__submit:disabled { color: var(--faint); cursor: default; }
+.scribe-float__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--ink) 28%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: scribe-spin 700ms linear infinite;
+}
+@keyframes scribe-spin { to { transform: rotate(360deg); } }
+.composer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.composer__model {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp);
+}
+.composer__model:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
+}
+.composer__caret {
+  color: var(--faint);
+  font-size: 11px;
+}
+.composer__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.composer__draft:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
+}
+.composer__draft:active {
+  transform: scale(0.92);
+}
+.composer__send {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: var(--accent-ink);
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px var(--accent-soft);
+  transition: filter var(--sp), transform var(--sp), box-shadow var(--sp);
+}
+.composer__send:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+}
+.composer__send:not(:disabled):hover {
+  filter: brightness(1.07);
+}
+.composer__send:not(:disabled):active {
+  transform: scale(0.92);
+}
+/* Stop, in the send button's place while a turn is in flight. Deliberately not the accent
+   gradient: it is the one control here that undoes rather than commits, and it should not look
+   like the button the user just pressed. */
+.composer__send--stop {
+  background: var(--fill);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: none;
+  font-size: 9px;
+  line-height: 1;
+}
+

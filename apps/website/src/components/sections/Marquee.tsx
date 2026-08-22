@@ -66,10 +66,10 @@ function Track({ brands, reverse = false }: { brands: readonly (typeof BRAND_LOG
         return (
           <span
             key={`${tool.domain}-${index}`}
-            className="mx-6 inline-flex h-[42px] w-10 shrink-0 items-center justify-center sm:mx-7"
+            className="mx-6 inline-flex size-[48px] shrink-0 items-center justify-center sm:mx-7"
             aria-hidden={index >= brands.length}
           >
-            <BrandIcon domain={tool.domain} name={tool.name} size={30} className="size-[30px] rounded-[7px]" />
+            <BrandIcon domain={tool.domain} name={tool.name} size={36} className="size-[36px] rounded-[8px]" />
           </span>
         );
       })}
@@ -94,9 +94,6 @@ export function Marquee({ t }: { t: Dictionary }) {
       </div>
       <div className="group/mq marquee-mask overflow-hidden">
         <Track brands={BRAND_ROWS[0]} />
-        <div className="container-x">
-          <div className="h-px bg-border/70" />
-        </div>
         <Track brands={BRAND_ROWS[1]} reverse />
       </div>
     </section>

@@ -59,7 +59,10 @@ struct WhisperSlot {
 }
 
 enum AsrCache {
-    Deepgram(Deepgram),
+    Deepgram {
+        client: Deepgram,
+        keyterms: Vec<String>,
+    },
     Whisper(WhisperSlot),
 }
 
@@ -112,20 +115,61 @@ fn trace_sink(
         .ok_or_else(|| "memory is unavailable, so voice egress cannot be recorded".to_string())
 }
 
-fn voice_config() -> DeepgramConfig {
-    DeepgramConfig::default().with_purpose("voice_dictation")
+fn voice_keyterms(
+    dictionary: &shogun_core::voice_dictionary::VoiceDictionary,
+    context: &shogun_core::voice_dictionary::DictionaryContext,
+    allow_personal_dictionary_keyterms: bool,
+) -> Vec<String> {
+    if allow_personal_dictionary_keyterms {
+        dictionary.keyterms_for(context)
+    } else {
+        // User vocabulary stays local until explicit consent. Built-ins remain speech hints;
+        // exact local correction always uses the full dictionary in voice_session.
+        shogun_core::voice_dictionary::VoiceDictionary::with_defaults().keyterms_for(context)
+    }
 }
 
-fn build_deepgram(app: &AppHandle) -> Result<Deepgram, String> {
+fn voice_config(
+    app: &AppHandle,
+    context: &shogun_core::voice_dictionary::DictionaryContext,
+    allow_personal_dictionary_keyterms: bool,
+) -> DeepgramConfig {
+    let dictionary = app
+        .try_state::<Db>()
+        .map(|db| db.inner().voice_dictionary())
+        .unwrap_or_else(shogun_core::voice_dictionary::VoiceDictionary::with_defaults);
+    DeepgramConfig::default()
+        .with_purpose("voice_dictation")
+        .with_keyterms(voice_keyterms(
+            &dictionary,
+            context,
+            allow_personal_dictionary_keyterms,
+        ))
+}
+
+fn build_deepgram(
+    app: &AppHandle,
+    context: &shogun_core::voice_dictionary::DictionaryContext,
+    allow_personal_dictionary_keyterms: bool,
+) -> Result<Deepgram, String> {
     let auth = deepgram::resolve_auth()?;
-    let cfg = voice_config();
+    let cfg = voice_config(app, context, allow_personal_dictionary_keyterms);
     let trace = trace_sink(app)?;
     Deepgram::new(cfg, auth, trace)
 }
 
-fn try_open_live(app: &AppHandle) -> Result<DeepgramLive, String> {
+fn try_open_live(
+    app: &AppHandle,
+    context: &shogun_core::voice_dictionary::DictionaryContext,
+    allow_personal_dictionary_keyterms: bool,
+) -> Result<DeepgramLive, String> {
     let mut auth = deepgram::resolve_auth()?;
-    DeepgramLive::connect(&voice_config(), auth.as_mut(), LiveMode::Voice, trace_sink(app)?)
+    DeepgramLive::connect(
+        &voice_config(app, context, allow_personal_dictionary_keyterms),
+        auth.as_mut(),
+        LiveMode::Voice,
+        trace_sink(app)?,
+    )
 }
 
 fn deepgram_configured() -> bool {
@@ -133,13 +177,18 @@ fn deepgram_configured() -> bool {
 }
 
 /// Warm ASR off the hot path (hold-to-talk must not load 500MB on an NSEvent thread).
-pub fn preload_asr(app: &AppHandle) -> Result<(), String> {
+pub fn preload_asr(
+    app: &AppHandle,
+    allow_personal_dictionary_keyterms: bool,
+) -> Result<(), String> {
     if deepgram_configured() {
-        let d = build_deepgram(app)?;
+        let context = shogun_core::voice_dictionary::DictionaryContext::default();
+        let keyterms = voice_config(app, &context, allow_personal_dictionary_keyterms).keyterms;
+        let client = build_deepgram(app, &context, allow_personal_dictionary_keyterms)?;
         let mut guard = ASR
             .lock()
             .map_err(|_| "asr cache lock poisoned".to_string())?;
-        *guard = Some(AsrCache::Deepgram(d));
+        *guard = Some(AsrCache::Deepgram { client, keyterms });
         eprintln!("[voice] ASR backend=deepgram (nova-3 live WS, multi)");
         return Ok(());
     }
@@ -184,15 +233,21 @@ fn load_whisper(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_deepgram(app: &AppHandle) -> Result<(), String> {
+fn ensure_deepgram(
+    app: &AppHandle,
+    context: &shogun_core::voice_dictionary::DictionaryContext,
+    allow_personal_dictionary_keyterms: bool,
+) -> Result<(), String> {
+    let keyterms = voice_config(app, context, allow_personal_dictionary_keyterms).keyterms;
     let mut guard = ASR
         .lock()
         .map_err(|_| "asr cache lock poisoned".to_string())?;
-    if matches!(guard.as_ref(), Some(AsrCache::Deepgram(_))) {
+    if matches!(guard.as_ref(), Some(AsrCache::Deepgram { keyterms: cached, .. }) if cached == &keyterms)
+    {
         return Ok(());
     }
-    let d = build_deepgram(app)?;
-    *guard = Some(AsrCache::Deepgram(d));
+    let client = build_deepgram(app, context, allow_personal_dictionary_keyterms)?;
+    *guard = Some(AsrCache::Deepgram { client, keyterms });
     Ok(())
 }
 
@@ -200,15 +255,14 @@ fn transcribe_pcm_whisper(pcm: &[f32]) -> Result<String, String> {
     let mut guard = ASR
         .lock()
         .map_err(|_| "asr cache lock poisoned".to_string())?;
-    let slot = match guard.as_mut() {
-        Some(AsrCache::Whisper(w)) => w,
-        _ => {
-            return Err(
+    let slot =
+        match guard.as_mut() {
+            Some(AsrCache::Whisper(w)) => w,
+            _ => return Err(
                 "Speech model not ready yet — wait a moment after enabling Voice, then try again."
                     .to_string(),
-            )
-        }
-    };
+            ),
+        };
     let segments = catch_unwind(AssertUnwindSafe(|| slot.asr.transcribe(pcm)));
     let segments = match segments {
         Ok(s) => s,
@@ -224,7 +278,7 @@ fn transcribe_pcm_deepgram(pcm: &[f32]) -> Result<String, String> {
         .lock()
         .map_err(|_| "asr cache lock poisoned".to_string())?;
     let d = match guard.as_mut() {
-        Some(AsrCache::Deepgram(d)) => d,
+        Some(AsrCache::Deepgram { client, .. }) => client,
         _ => return Err("Deepgram client not ready — try again in a moment.".into()),
     };
     d.transcribe_utterance(pcm)
@@ -240,15 +294,20 @@ fn join_segments(segments: &[shogun_core::audio::Segment]) -> Result<String, Str
     Ok(text)
 }
 
-fn transcribe_clip(app: &AppHandle, pcm: &[f32]) -> TranscriptOutcome {
+fn transcribe_clip(
+    app: &AppHandle,
+    pcm: &[f32],
+    context: &shogun_core::voice_dictionary::DictionaryContext,
+    allow_personal_dictionary_keyterms: bool,
+) -> TranscriptOutcome {
     if deepgram_configured() {
-        if let Err(e) = ensure_deepgram(app) {
-            return TranscriptOutcome::Err(e);
+        if let Err(e) = ensure_deepgram(app, context, allow_personal_dictionary_keyterms) {
+            return TranscriptOutcome::Err(deepgram::public_error(&e));
         }
         match transcribe_pcm_deepgram(pcm) {
             Ok(t) if t.trim().is_empty() => TranscriptOutcome::Empty,
             Ok(t) => TranscriptOutcome::Ok(t),
-            Err(e) => TranscriptOutcome::Err(e),
+            Err(e) => TranscriptOutcome::Err(deepgram::public_error(&e)),
         }
     } else {
         if let Err(e) = load_whisper(app) {
@@ -267,15 +326,17 @@ fn flush_chunk(live: &mut DeepgramLive, pending: &mut Vec<f32>) {
         return;
     }
     if let Err(e) = live.push_pcm(pending) {
-        eprintln!("[voice] live push failed: {e}");
+        let _ = e;
+        eprintln!("[voice] live push failed; switching to HTTP fallback");
     }
     pending.clear();
 }
 
 /// Ask macOS for microphone access while the user is visibly enabling Voice. The stream is
 /// stopped immediately; no captured samples are retained, persisted, or sent to an ASR provider.
-pub fn request_microphone_access() -> Result<(), String> {
-    let mut mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
+pub fn request_microphone_access(selected_device: Option<&str>) -> Result<(), String> {
+    let mut mic = Mic::open_with_device(selected_device)
+        .map_err(|e| format!("microphone unavailable: {e}"))?;
     mic.stop();
     Ok(())
 }
@@ -284,8 +345,14 @@ pub fn request_microphone_access() -> Result<(), String> {
 ///
 /// Does **not** load Whisper here — preload / release keeps hold-start fast. Live WS opens on the
 /// capture thread so the UI is not blocked on the handshake; audio streams as soon as connected.
-pub fn start(app: &AppHandle) -> Result<Handle, String> {
-    let mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
+pub fn start(
+    app: &AppHandle,
+    context: shogun_core::voice_dictionary::DictionaryContext,
+    allow_personal_dictionary_keyterms: bool,
+    selected_device: Option<&str>,
+) -> Result<Handle, String> {
+    let mic = Mic::open_with_device(selected_device)
+        .map_err(|e| format!("microphone unavailable: {e}"))?;
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
     let app_handle = app.clone();
@@ -294,13 +361,13 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
     let join = std::thread::spawn(move || {
         let mut mic = mic;
         let mut live = if prefer_live {
-            match try_open_live(&app_handle) {
+            match try_open_live(&app_handle, &context, allow_personal_dictionary_keyterms) {
                 Ok(session) => {
                     eprintln!("[voice] live WS open");
                     Some(session)
                 }
-                Err(e) => {
-                    eprintln!("[voice] live WS unavailable ({e}); HTTP batch fallback");
+                Err(_error) => {
+                    eprintln!("[voice] live WS unavailable; HTTP batch fallback");
                     None
                 }
             }
@@ -333,8 +400,8 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
                     while pending.len() >= LIVE_CHUNK_SAMPLES {
                         let chunk: Vec<f32> = pending.drain(..LIVE_CHUNK_SAMPLES).collect();
                         if let Some(ref mut session) = live {
-                            if let Err(e) = session.push_pcm(&chunk) {
-                                eprintln!("[voice] live push failed ({e}); switching to ring");
+                            if let Err(_error) = session.push_pcm(&chunk) {
+                                eprintln!("[voice] live push failed; switching to ring");
                                 pending.clear();
                                 // Drop session → CloseStream; remaining audio goes to HTTP path.
                                 let _ = live.take();
@@ -354,13 +421,18 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
             match session.finish() {
                 Ok(t) if t.trim().is_empty() => TranscriptOutcome::Empty,
                 Ok(t) => TranscriptOutcome::Ok(t),
-                Err(e) => {
+                Err(_error) => {
                     let pcm = ring.drain();
                     if !pcm.is_empty() {
-                        eprintln!("[voice] live finish failed ({e}); HTTP fallback on ring");
-                        return transcribe_clip(&app_handle, &pcm);
+                        eprintln!("[voice] live finish failed; HTTP fallback on ring");
+                        return transcribe_clip(
+                            &app_handle,
+                            &pcm,
+                            &context,
+                            allow_personal_dictionary_keyterms,
+                        );
                     }
-                    TranscriptOutcome::Err(e)
+                    TranscriptOutcome::Err(deepgram::public_error("live finish failed"))
                 }
             }
         } else {
@@ -371,7 +443,12 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
             if pcm.is_empty() {
                 return TranscriptOutcome::Empty;
             }
-            transcribe_clip(&app_handle, &pcm)
+            transcribe_clip(
+                &app_handle,
+                &pcm,
+                &context,
+                allow_personal_dictionary_keyterms,
+            )
         }
     });
 
@@ -387,5 +464,31 @@ pub fn stop(mut handle: Handle) -> TranscriptOutcome {
     match handle.join.take().and_then(|j| j.join().ok()) {
         Some(out) => out,
         None => TranscriptOutcome::Err("audio lane thread failed".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shogun_core::voice_dictionary::{DictionaryContext, TermScope, VoiceDictionary};
+
+    #[test]
+    fn personal_vocabulary_hints_require_explicit_consent() {
+        let dictionary = VoiceDictionary::with_user_entries(vec![VoiceDictionary::user_entry(
+            "Figma".into(),
+            vec!["fig ma".into()],
+            None,
+            TermScope::Global,
+            0,
+            true,
+        )]);
+        let context = DictionaryContext::default();
+
+        let local_only = voice_keyterms(&dictionary, &context, false);
+        assert!(local_only.iter().any(|term| term == "ShogunAI"));
+        assert!(!local_only.iter().any(|term| term == "Figma"));
+
+        let consented = voice_keyterms(&dictionary, &context, true);
+        assert!(consented.iter().any(|term| term == "Figma"));
     }
 }

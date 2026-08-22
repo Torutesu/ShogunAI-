@@ -203,7 +203,12 @@ html[data-theme='dark'] .waitlist-form-default button {
 }
 
 .hero-shell {
-  min-height: calc(100svh - 4rem);
+  /* Capped, then centred. A full-viewport box left far more slack than the
+   * content needed, and wherever that slack went it looked wrong: split evenly
+   * it opened a grey band under the nav, pushed to the foot it left the badges
+   * stranded above a huge stretch of artwork. A shorter box has little slack to
+   * place, so an even split reads as even margins. */
+  min-height: min(calc(100svh - 4rem), 800px);
   background: #f7f5f0 url('/optimized/shogunai-hero-kyoto-v3.jpg') center bottom / 100% auto no-repeat;
   /* The hero is at least a viewport tall, and its content was pinned to the
    * top of that box: 23px under the nav on every screen, against as much as
@@ -228,7 +233,7 @@ html[data-theme='dark'] .waitlist-form-default button {
 @media (min-height: 1150px) {
   .hero-shell {
     justify-content: flex-start;
-    padding-top: 9vh;
+    padding-top: 2vh;
   }
 }
 
@@ -374,26 +379,104 @@ html[data-theme='dark'] .theme-light-badge {
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
-.hero-demo-shell {
-  animation: hero-demo-float 7s ease-in-out infinite;
+.hero-video-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.hero-demo-scale {
-  /* Width is 1/scale, so the painted box is exactly the frame's width — but
-   * only if the anchored edge is the one that starts inside the frame. With
-   * `top right` the untransformed right edge sat past the container and the
-   * shot bled off-screen on narrower laptops. */
-  transform-origin: top left;
+.hero-video-shell {
+  position: relative;
+  isolation: isolate;
+  width: min(100%, 740px);
+  aspect-ratio: 1200 / 904;
+  perspective: 1600px;
+}
+
+.hero-macbook {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.hero-macbook-lid {
+  position: absolute;
+  z-index: 1;
+  top: 4.2%;
+  right: 4%;
+  bottom: 9%;
+  left: 4%;
+  overflow: hidden;
+  border: 1px solid rgba(93, 111, 136, 0.58);
+  border-radius: clamp(20px, 2.4vw, 34px) clamp(20px, 2.4vw, 34px) 22px 22px;
+  background: linear-gradient(145deg, #1c2737 0%, #0c1420 52%, #151f2d 100%);
+  backface-visibility: hidden;
+  transform: rotateX(0deg);
+  transform-origin: 50% 99%;
+  animation: hero-macbook-open 1100ms cubic-bezier(0.2, 0.72, 0.2, 1) both;
+  will-change: transform;
+}
+
+.hero-macbook-screen {
+  position: absolute;
+  inset: 2.15% 1.5% 9%;
+  overflow: hidden;
+  border: 1px solid rgba(5, 9, 16, 0.9);
+  border-radius: 12px 12px 16px 16px;
+  background: #07101d;
+}
+
+.hero-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  filter: saturate(0.96) contrast(1.03);
+}
+
+.hero-macbook-base {
+  position: absolute;
+  z-index: 2;
+  right: 2.65%;
+  bottom: 6.95%;
+  left: 2.65%;
+  height: 2.7%;
+  border: 1px solid rgba(83, 99, 119, 0.72);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #546173 0%, #202c3c 34%, #0b111a 76%, #253142 100%);
+}
+
+.hero-macbook-base::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 43%;
+  width: 14%;
+  height: 34%;
+  border-radius: 0 0 999px 999px;
+  background: rgba(6, 11, 18, 0.75);
+}
+
+@keyframes hero-macbook-open {
+  0%,
+  8% {
+    transform: rotateX(-88deg);
+  }
+
+  100% {
+    transform: rotateX(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-macbook-lid {
+    animation: none;
+  }
 }
 
 @media (min-width: 1024px) and (max-height: 760px) {
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 380px;
-  }
-
-  .hero-demo-scale {
-    width: 142.857%;
-    transform: scale(0.7);
   }
 }
 
@@ -406,35 +489,21 @@ html[data-theme='dark'] .theme-light-badge {
     padding-bottom: 8px;
   }
 
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 500px;
-  }
-
-  .hero-demo-scale {
-    width: 111.111%;
-    transform: scale(0.9);
   }
 
   .hero-badges {
     margin-top: 18px;
   }
 
-  .hero-badges > div > div,
-  .hero-badges > div > a > div {
-    min-height: 68px !important;
-  }
 }
 
 /* Keep the full desktop hero—including its proof badges—inside shorter
  * laptop/tablet viewports without changing the spacious wide layout. */
 @media (min-width: 701px) and (max-width: 1100px) and (max-height: 820px) {
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 500px;
-  }
-
-  .hero-demo-scale {
-    width: 111.111%;
-    transform: scale(0.9);
   }
 }
 
@@ -458,13 +527,8 @@ html[data-theme='dark'] .theme-light-badge {
     padding-bottom: 4px;
   }
 
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 430px;
-  }
-
-  .hero-demo-scale {
-    width: 125%;
-    transform: scale(0.8);
   }
 
   .hero-badges {
@@ -488,23 +552,14 @@ html[data-theme='dark'] .theme-light-badge {
     padding-bottom: 4px;
   }
 
-  .hero-demo-frame {
+  .hero-video-frame {
     height: 372px;
-  }
-
-  .hero-demo-scale {
-    width: 133.333%;
-    transform: scale(0.75);
   }
 
   .hero-badges {
     margin-top: 10px;
   }
 
-  .hero-badges > div > div,
-  .hero-badges > div > a > div {
-    min-height: 56px !important;
-  }
 
   .hero-title {
     font-size: clamp(34px, 4.2vw, 46px);
@@ -542,6 +597,15 @@ html[data-theme='dark'] .theme-light-badge {
   font-size: clamp(28px, 5.1vw, 40px);
   line-height: 1.16;
   letter-spacing: -0.035em;
+}
+
+:is(html, main)[lang='ja'] .hero-title {
+  font-size: clamp(30px, 3.3vw, 38px);
+  line-height: 1.12;
+}
+
+:is(html, main)[lang='de'] .hero-title {
+  font-size: clamp(34px, 4vw, 52px);
 }
 
 :is(html, main)[lang='ja'] .cta-title {
@@ -720,15 +784,6 @@ html[data-theme='dark'] .theme-light-badge {
     transform: translate3d(16px, -8px, 0);
   }
 }
-@keyframes hero-demo-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-7px);
-  }
-}
 @keyframes marquee {
   from {
     transform: translateX(0);
@@ -873,7 +928,6 @@ html[data-theme='dark'] .theme-light-badge {
   .orb,
   .animate-floaty,
   .marquee-track,
-  .hero-demo-shell,
   .campaign-bar,
   .campaign-shine,
   .campaign-spark {

@@ -1,0 +1,179 @@
+/* SHOGUN panel — hangs from the notch. Idle = welded opaque chin; Expanded = soft glass.
+   Motion tokens stay inside Idle→Expanded SLO (open ≤120ms, close ≤160ms). Theme-aware; dark default. */
+:root {
+  /* Dark mode is OLED black throughout the shell. Contrast comes from hairlines and translucent
+     control fills, not a blue-gray panel tint. */
+  --glass: #000000;
+  --glass-2: #000000;
+  --line: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --ink: #eef1f5;
+  --muted: #9aa3af;
+  --faint: #8b95a3;
+  --accent: #6ea8fe;
+  --accent-2: #8f7dfb;
+  --accent-ink: #06101c;
+  --accent-soft: color-mix(in srgb, var(--accent) 26%, transparent);
+  --live: #30d158;
+  --warn: #ff9f0a;
+  --danger: #ff6b6b;
+  --danger: #ff6b6b;
+  --danger: #ff6b6b;
+  --fill: rgba(255, 255, 255, 0.06);
+  --fill-strong: rgba(255, 255, 255, 0.12);
+  --card: rgba(255, 255, 255, 0.045);
+  --sys: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Shell motion (playbook §3). Open ≤100ms SLO; close ~140ms critically-damped feel. */
+  --notch-open: 100ms cubic-bezier(0.32, 0.72, 0, 1);
+  --notch-close: 140ms cubic-bezier(0.4, 0, 0.2, 1);
+  --notch-content: 72ms cubic-bezier(0.16, 1, 0.3, 1);
+  --notch-hover: 80ms ease-out;
+  --sp: var(--notch-close);
+  /* Idle chin (spec) vs Expanded bottom radius — tween with shell. */
+  --r-idle-bot: 8px;
+  --r-exp-bot: 16px;
+  --r-shell-bot: var(--r-idle-bot);
+  /* Morph start scale: chin W×H over panel W×H. JS overwrites on expand/collapse. */
+  --shell-sx: 0.46;
+  --shell-sy: 0.089;
+  /* Hardware cutout (dead) + visible content drop below silicon (boring.notch). */
+  --notch-dead-h: 32px;
+  /* Visible drop below silicon — match pre-weld 44px Idle presence (sync H_CHIN_ROW / IDLE_CONTENT_DROP). */
+  --chin-row-h: 44px;
+  --chin-h: calc(var(--notch-dead-h) + var(--chin-row-h));
+  /* Type scale. Tightened one step across the board: this is a dense overlay hanging off the
+     menu bar, and at the previous sizes a few settings groups filled the whole screen height. */
+  --fs-xs: 10px;
+  --fs-sm: 11px;
+  --fs-md: 12px;
+  --fs-lg: 13px;
+  --fs-xl: 14px;
+  /* rounder-everywhere radius scale, scaled down with the type */
+  --r-xs: 7px;
+  --r-sm: 10px;
+  --r-md: 13px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+  /* Welded Idle fill — always black, never glass. */
+  --chin: #000000;
+  --chin-ink: #eef1f5;
+  --chin-muted: #9aa3af;
+  --chin-fill: rgba(255, 255, 255, 0.06);
+  --chin-line: rgba(255, 255, 255, 0.11);
+  /* Opaque panel/settings ground under transparent NSPanel (must stay solid). */
+  --shell: #000000;
+  --settings-nav-bg: #000000;
+  /* Scrollbar tokens — transparent track, ink-tinted thumb (overlay on content edge). */
+  --scroll-track: transparent;
+  --scroll-thumb: color-mix(in srgb, var(--ink) 26%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--ink) 40%, transparent);
+  color-scheme: dark;
+}
+/* Bare :root doubles as the JS-not-ready bootstrap default AND explicit dark, so keep them in
+   sync in one place (App.tsx always sets data-appearance now, but the bootstrap default must
+   still be dark to avoid a light flash). */
+:root[data-appearance="dark"] {
+  color-scheme: dark;
+  --glass: #000000;
+  --glass-2: #000000;
+  --line: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --ink: #eef1f5;
+  --muted: #9aa3af;
+  --faint: #8b95a3;
+  --accent: #6ea8fe;
+  --accent-2: #8f7dfb;
+  --accent-ink: #06101c;
+  --live: #30d158;
+  --warn: #ff9f0a;
+  --danger: #ff6b6b;
+  --fill: rgba(255, 255, 255, 0.06);
+  --fill-strong: rgba(255, 255, 255, 0.12);
+  --card: rgba(255, 255, 255, 0.045);
+  --shell: #000000;
+  --settings-nav-bg: #000000;
+}
+:root[data-appearance="light"] {
+  color-scheme: light;
+  --glass: rgba(252, 253, 255, 0.94);
+  --glass-2: rgba(255, 255, 255, 0.97);
+  --line: rgba(16, 24, 40, 0.10);
+  --line-strong: rgba(16, 24, 40, 0.17);
+  --ink: #1b1d22;
+  --muted: #5c616a;
+  --faint: #6b7280;
+  --accent: #2f6fed;
+  --accent-2: #6a53e6;
+  --accent-ink: #ffffff;
+  --live: #1f9e3c;
+  --warn: #a4560a;
+  --danger: #d64545;
+  --fill: rgba(0, 0, 0, 0.045);
+  --fill-strong: rgba(0, 0, 0, 0.09);
+  --card: rgba(0, 0, 0, 0.035);
+  --shell: #f7f8fb;
+  --settings-nav-bg: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--shell)) 0%, var(--shell) 55%);
+}
+:root[data-appearance="auto"] {
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-appearance="auto"] {
+    --glass: rgba(252, 253, 255, 0.94);
+    --glass-2: rgba(255, 255, 255, 0.97);
+    --line: rgba(16, 24, 40, 0.10);
+    --line-strong: rgba(16, 24, 40, 0.17);
+    --ink: #1b1d22;
+    --muted: #5c616a;
+    --faint: #6b7280;
+    --accent: #2f6fed;
+    --accent-2: #6a53e6;
+    --accent-ink: #ffffff;
+    --live: #1f9e3c;
+    --warn: #a4560a;
+    --danger: #d64545;
+    --fill: rgba(0, 0, 0, 0.045);
+    --fill-strong: rgba(0, 0, 0, 0.09);
+    --card: rgba(0, 0, 0, 0.035);
+    --shell: #f7f8fb;
+    --settings-nav-bg: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--shell)) 0%, var(--shell) 55%);
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  /* Paint INTO the notch cutout — never inherit env(safe-area-inset-*) as top push. */
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+body {
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--sys);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.stage {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  position: relative;
+}

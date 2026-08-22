@@ -20,13 +20,227 @@ use shogun_memory::traceability::{Filter, TraceRow};
 use shogun_memory::MemoryError;
 use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, CommitmentDue, MorningBrief, OpenLoopItem};
 use shogun_fusion::assemble::ActionCandidate;
-use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
+use shogun_fusion::block::{BlockRef, ContextBlock, SourceKind};
 use shogun_fusion::budget::TokenEstimator;
 
 use crate::capture::dedup::{decide_hash, Recent};
 use crate::memory_health::{FaultClass, MemoryFault, MemoryResult};
 use crate::db_sink::DbTraceabilitySink;
 use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState, DEGRADED_SEQUENCE};
+
+mod ingestion;
+mod maintenance;
+mod meetings;
+mod replies;
+mod search;
+
+pub use ingestion::IngestSummary;
+pub use search::{ContextPack, Evidence, ScreenFrameRef};
+
+mod voice_dictionary_support {
+    use shogun_memory::voice_terms::{self, VoiceTerm};
+
+    pub(super) fn dictionary_entry(term: VoiceTerm) -> crate::voice_dictionary::DictionaryEntry {
+        use crate::voice_dictionary::TermScope;
+
+        let scope = match term.scope {
+            voice_terms::VoiceTermScope::Global => TermScope::Global,
+            voice_terms::VoiceTermScope::Bundle => TermScope::Bundle(term.scope_ref.unwrap_or_default()),
+            voice_terms::VoiceTermScope::Surface => TermScope::Surface(term.scope_ref.unwrap_or_default()),
+        };
+        crate::voice_dictionary::VoiceDictionary::user_entry(
+            term.canonical,
+            term.aliases,
+            term.locale,
+            scope,
+            term.priority,
+            term.enabled,
+        )
+    }
+}
+
+mod context_assembly {
+    use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind, StateTable};
+    use shogun_fusion::budget::TokenEstimator;
+
+    use super::Evidence;
+
+    /// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
+    pub(super) const EVIDENCE_RELEVANCE: f64 = 0.7;
+    const EVIDENCE_SCORE: ScoreInputs =
+        ScoreInputs { relevance: EVIDENCE_RELEVANCE, freshness: 0.5, task_link: 0.0, confidence: 1.0 };
+    /// retrieved evidence の属する session の保存済み要約。参照先＝関連度高、要約＝confidence 1.0。
+    pub(super) const SESSION_SUMMARY_SCORE: ScoreInputs =
+        ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
+    /// 解決済みスレッドの保存済み要約。session と対称、参照先＝関連度高、要約＝confidence 1.0。
+    pub(super) const THREAD_SUMMARY_SCORE: ScoreInputs =
+        ScoreInputs { relevance: 0.9, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
+    /// confidence ゲート済み state fact。現在の作業に紐づく前提でやや高め、confidence は High 相当 0.9。
+    const FACT_SCORE: ScoreInputs =
+        ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 };
+
+    /// Map an open-loop `kind` string to the Fusion state kind that selects its action.
+    pub(super) fn open_loop_state_kind(kind: &str) -> shogun_fusion::assemble::StateKind {
+        use shogun_fusion::assemble::StateKind;
+        match kind {
+            "reply_needed" => StateKind::OpenLoopReplyNeeded,
+            "waiting_on_them" => StateKind::OpenLoopWaiting,
+            _ => StateKind::OpenLoopOther,
+        }
+    }
+
+    /// Score a state candidate's relevance to the focused screen (0.0..=1.0).
+    pub(super) fn screen_relevance(
+        screen: &shogun_fusion::assemble::ScreenContext,
+        subject: &str,
+        summary: &str,
+    ) -> f64 {
+        let hay = format!("{} {}", subject.to_lowercase(), summary.to_lowercase());
+        let title = screen.window_title.to_lowercase();
+        let title_hit = !title.is_empty()
+            && title.split_whitespace().any(|w| w.len() >= 4 && hay.contains(w));
+        let salient_hit = screen.salient.iter().any(|s| {
+            let s = s.to_lowercase();
+            !s.is_empty() && hay.contains(&s)
+        });
+        if salient_hit || title_hit {
+            1.0
+        } else {
+            0.4
+        }
+    }
+
+    /// Normalize retrieved evidence into compressed context blocks.
+    pub(super) fn evidence_to_blocks(
+        evidence: &[Evidence],
+        relevance: f64,
+        est: &dyn TokenEstimator,
+    ) -> Vec<ContextBlock> {
+        evidence
+            .iter()
+            .flat_map(|e| {
+                let mut blocks = Vec::with_capacity(usize::from(is_calendar_source(&e.source)) + 1);
+                if is_calendar_source(&e.source) {
+                    blocks.push(ContextBlock::new(
+                        BlockRef::Event(e.event_id),
+                        SourceKind::Structured,
+                        calendar_fact_text(e),
+                        evidence_score_inputs(SourceKind::Structured, relevance),
+                        est,
+                    ));
+                }
+                blocks.push(ContextBlock::new(
+                    BlockRef::Event(e.event_id),
+                    SourceKind::Evidence,
+                    e.excerpt.clone(),
+                    evidence_score_inputs(SourceKind::Evidence, relevance),
+                    est,
+                ));
+                blocks
+            })
+            .collect()
+    }
+
+    /// Query-time confidence: the source trust prior replaces the old fake `1.0` on quoted hits.
+    fn evidence_score_inputs(kind: SourceKind, relevance: f64) -> ScoreInputs {
+        ScoreInputs {
+            relevance,
+            freshness: EVIDENCE_SCORE.freshness,
+            task_link: EVIDENCE_SCORE.task_link,
+            confidence: shogun_fusion::trust::query_time_confidence(kind),
+        }
+    }
+
+    pub(super) fn is_calendar_source(source: &str) -> bool {
+        matches!(
+            shogun_mcp::scope::from_source(source),
+            Some(shogun_mcp::scope::Service::GoogleCalendar)
+        )
+    }
+
+    fn calendar_fact_text(evidence: &Evidence) -> String {
+        let title = evidence
+            .title
+            .as_deref()
+            .filter(|title| !title.is_empty())
+            .unwrap_or("Untitled event");
+        format!(
+            "Calendar event\nTitle: {title}\nTimestamp (unix ms): {}\nEvent ID: {}",
+            evidence.ts, evidence.event_id
+        )
+    }
+
+    /// Normalize confidence-gated state facts into compressed context blocks.
+    pub(super) fn facts_to_blocks(
+        facts: &[(String, StateTable, i64)],
+        est: &dyn TokenEstimator,
+    ) -> Vec<ContextBlock> {
+        facts
+            .iter()
+            .map(|(f, table, id)| {
+                ContextBlock::new(
+                    BlockRef::State { table: *table, id: *id },
+                    SourceKind::StateFact,
+                    f.clone(),
+                    FACT_SCORE,
+                    est,
+                )
+            })
+            .collect()
+    }
+}
+
+mod dream_ledger {
+    use crate::dreamcycle::plan::{JobKind, JobState};
+
+    pub(super) fn job_kind_str(kind: JobKind) -> &'static str {
+        match kind {
+            JobKind::Consolidation => "consolidation",
+            JobKind::Compression => "compression",
+            JobKind::StateUpdate => "state_update",
+            JobKind::ConfidenceRecalc => "confidence_recalc",
+            JobKind::ColdDemotion => "cold_demotion",
+            JobKind::MorningBrief => "morning_brief",
+            JobKind::LessonDistillation => "lesson_distillation",
+        }
+    }
+
+    pub(super) fn parse_job_kind(s: &str) -> Option<JobKind> {
+        Some(match s {
+            "consolidation" => JobKind::Consolidation,
+            "compression" => JobKind::Compression,
+            "state_update" => JobKind::StateUpdate,
+            "confidence_recalc" => JobKind::ConfidenceRecalc,
+            "cold_demotion" => JobKind::ColdDemotion,
+            "morning_brief" => JobKind::MorningBrief,
+            "lesson_distillation" => JobKind::LessonDistillation,
+            _ => return None,
+        })
+    }
+
+    pub(super) fn job_state_str(state: JobState) -> &'static str {
+        match state {
+            JobState::Pending => "pending",
+            JobState::Running => "running",
+            JobState::Done => "done",
+            JobState::Failed => "failed",
+        }
+    }
+
+    pub(super) fn parse_job_state(s: &str) -> Option<JobState> {
+        Some(match s {
+            "pending" => JobState::Pending,
+            "running" => JobState::Running,
+            "done" => JobState::Done,
+            "failed" => JobState::Failed,
+            _ => return None,
+        })
+    }
+}
+
+use context_assembly::{EVIDENCE_RELEVANCE, SESSION_SUMMARY_SCORE, THREAD_SUMMARY_SCORE};
+use shogun_memory::voice_terms::{self, NewVoiceTerm, VoiceTerm};
+use voice_dictionary_support::dictionary_entry;
 
 /// How many recent capture bodies the near-dup collapse (FR-CAP-03) compares against. Bounds the
 /// per-capture comparison cost; window re-reads are near each other in the log, so a small window
@@ -37,67 +251,31 @@ const RECENT_DEDUP_WINDOW: usize = 8;
 /// 両パスで一致させ、fact の一貫性を保つ。
 const FACT_LIMIT: usize = 8;
 
-/// The outcome of ingesting a batch of synced integration items ([`Db::ingest_integration`]):
-/// how many were processed, how many were genuinely new (the `IntegrationSynced` bus count), and
-/// how many low-confidence state candidates the new items yielded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct IngestSummary {
-    pub processed: usize,
-    pub newly_inserted: usize,
-    pub candidates: usize,
+/// The stable identifiers known for one generation request. Global lessons always apply; scoped
+/// lessons apply only when their matching identifier is present here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationContext<'a> {
+    pub app_bundle_id: Option<&'a str>,
+    pub person_id: Option<&'a str>,
+    pub project_id: Option<&'a str>,
 }
 
-/// The first-layer connector runtime ([`shogun_integrations::ConnectorRuntime`]) hands each synced
-/// batch to this sink; the daemon persists it into the event log via [`Db::ingest_integration`].
-/// `newly_inserted` is what an `IntegrationSynced` bus event reports (§6.9). This keeps data gravity
-/// in the core (invariant 1) — the connector crate never touches the DB.
-impl shogun_integrations::IngestSink for Db {
-    fn ingest(&self, items: &[shogun_mcp::sync::IngestItem]) -> usize {
-        self.ingest_integration(items).newly_inserted
+impl<'a> GenerationContext<'a> {
+    /// Global always; app / person / project only when that identifier is present.
+    pub fn lesson_scopes(self) -> Vec<shogun_memory::lessons::ScopeFilter<'a>> {
+        use shogun_memory::lessons::{LessonScope, ScopeFilter};
+        let mut scopes = vec![ScopeFilter { scope: LessonScope::Global, scope_ref: None }];
+        if let Some(app_bundle_id) = self.app_bundle_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::App, scope_ref: Some(app_bundle_id) });
+        }
+        if let Some(person_id) = self.person_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Person, scope_ref: Some(person_id) });
+        }
+        if let Some(project_id) = self.project_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Project, scope_ref: Some(project_id) });
+        }
+        scopes
     }
-}
-
-/// One retrieved piece of evidence behind an answer ([`Db::assemble_context`]). Carries its
-/// `event_id` so a generated answer can cite what it was grounded in (provenance is the whole
-/// point of the state/event split) and its `source` so mail is distinguishable from a captured
-/// window (FR-MEM-23).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Evidence {
-    pub event_id: i64,
-    pub ts: i64,
-    pub source: String,
-    pub title: Option<String>,
-    pub excerpt: String,
-    /// Linked `screen_frames` row when a finite-retention encrypted JPEG is stored.
-    pub frame_id: Option<i64>,
-}
-
-/// A stored screen capture available for visual recall (metadata only — bytes via [`Db::get_screen_frame`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScreenFrameRef {
-    pub frame_id: i64,
-    pub event_id: i64,
-    pub ts: i64,
-    pub app_bundle_id: Option<String>,
-    pub window_title: Option<String>,
-    pub width: u32,
-    pub height: u32,
-    pub ocr_excerpt: String,
-    /// Thin stored OCR — caller should re-scan the JPEG (Vision) before answering.
-    pub needs_rescan: bool,
-    /// Linked event source.
-    pub source: String,
-}
-
-/// The grounded context for one question: confidence-gated state facts plus the retrieved
-/// evidence that mentions it. Facts say what SHOGUN believes; evidence says what was actually
-/// seen, and only evidence can answer "what happened with X".
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct ContextPack {
-    pub facts: Vec<String>,
-    pub evidence: Vec<Evidence>,
-    /// Stored JPEG frames matching a visual-recall question (hook for future vision input).
-    pub screen_frames: Vec<ScreenFrameRef>,
 }
 
 /// How much of a thread a reply context carries. Enough to answer in the conversation's own
@@ -110,29 +288,10 @@ const REPLY_RELATED_CHARS: usize = 300;
 /// クエリ時のローカル圧縮に許す時間予算。超えたら raw にフォールバック（SLO +300ms 厳守）。
 const COMPRESS_BUDGET_MS: u64 = 50;
 
-// 圧縮ブロックの relevance/freshness/task_link/confidence 係数（設計 §3.3/§3.4）。
-// 従来は各所にインラインのリテラルで散らばっていた（Issue #63 finding #7）。ここに集約して
-// 由来ごとの相対関係（thread ≥ session ≥ evidence、fact は現在の作業に紐づく前提でやや高め）を
-// 一望できるようにし、thread/session の対称性を型で担保する。数値は従来と同一。
-//
-/// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
-const EVIDENCE_RELEVANCE: f64 = 0.7;
-
 /// How many learned lessons ride into one context assembly / generation prompt (Plan D-5's
 /// default top-k of 5). The token budget in `shogun_fusion::assemble::LESSON_BUDGET_TOKENS`
 /// bounds them again by size.
 const LESSON_TOP_K: usize = 5;
-const EVIDENCE_SCORE: ScoreInputs =
-    ScoreInputs { relevance: EVIDENCE_RELEVANCE, freshness: 0.5, task_link: 0.0, confidence: 1.0 };
-/// retrieved evidence の属する session の保存済み要約。参照先＝関連度高、要約＝confidence 1.0。
-const SESSION_SUMMARY_SCORE: ScoreInputs =
-    ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
-/// 解決済みスレッドの保存済み要約。session と対称、参照先＝関連度高、要約＝confidence 1.0。
-const THREAD_SUMMARY_SCORE: ScoreInputs =
-    ScoreInputs { relevance: 0.9, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
-/// confidence ゲート済み state fact。現在の作業に紐づく前提でやや高め、confidence は High 相当 0.9。
-const FACT_SCORE: ScoreInputs =
-    ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 };
 
 /// ドラフトの本文がどこ由来か。融合の provenance（設計 §3）。
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -297,11 +456,7 @@ pub struct LocalMaintenance {
 pub fn overdue_notifications(
     newly: &[shogun_memory::recompute::NewlyOverdue],
 ) -> Vec<shogun_agents::permission::Action> {
-    use shogun_agents::permission::{Action, LocalAction};
-    newly
-        .iter()
-        .map(|c| Action::Local(LocalAction::ShowNotification { text: format!("Overdue: {}", c.description) }))
-        .collect()
+    maintenance::overdue_notifications(newly)
 }
 
 /// One candidate answer to "which thread is this question about".
@@ -323,15 +478,7 @@ pub struct ReferentOutcome {
 /// Fraction of the thread title's words that appear in the question — the lexical agreement term
 /// of salience. Words of one or two characters are skipped as too common to carry signal.
 fn title_overlap(question_lower: &str, title_lower: &str) -> f64 {
-    let words: Vec<&str> = title_lower
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() > 2)
-        .collect();
-    if words.is_empty() {
-        return 0.0;
-    }
-    let hits = words.iter().filter(|w| question_lower.contains(**w)).count();
-    hits as f64 / words.len() as f64
+    replies::title_overlap(question_lower, title_lower)
 }
 
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
@@ -804,10 +951,12 @@ impl Db {
     /// (FR-CAP-03): re-syncing the same item touches `last_seen_at` rather than duplicating it.
     ///
     /// On a **new** insert (not a dedup-touch) the first-stage local-rule extraction (WP2.7) runs
-    /// over the item body, so a commitment or open-loop stated in an email/message flows into the
-    /// state tables just as one captured on screen does — each candidate is low-confidence
-    /// (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`]) and linked to the ingested event
-    /// (FR-ST-02). Extraction is skipped on a touch so a re-sync never multiplies candidates.
+    /// over **prose** bodies (mail, chat, docs), so a commitment stated in an email flows into the
+    /// state tables at low confidence (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`])
+    /// linked to the ingested event (FR-ST-02). Calendar metadata (title / timestamp / event ID)
+    /// is emitted later as [`SourceKind::Structured`], while its description remains evidence;
+    /// neither should become a guessed 0.4 speech act. Extraction is skipped on a touch so a re-sync never
+    /// multiplies candidates.
     ///
     /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
     /// persists. On completion, a batch that inserted ≥ 1 **new** item publishes
@@ -855,13 +1004,20 @@ impl Db {
                     Some((_, n)) => *n += 1,
                     None => synced.push((it.source, 1)),
                 }
-                // A newly-ingested item is extracted for commitments / open loops, linked to it.
-                let candidates = shogun_memory::extract::extract_untrusted(&it.body);
-                if !candidates.is_empty() {
-                    let ids =
-                        shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
-                            .unwrap_or_default();
-                    summary.candidates += ids.len();
+                // Calendar descriptions stay searchable evidence, not speech acts (issue #35).
+                if extracts_untrusted_body(it.source) {
+                    let candidates = shogun_memory::extract::extract_untrusted(&it.body);
+                    if !candidates.is_empty() {
+                        let ids = shogun_memory::extract::persist_candidates(
+                            &mut guard,
+                            id,
+                            &candidates,
+                            it.ts_ms,
+                            now,
+                        )
+                        .unwrap_or_default();
+                        summary.candidates += ids.len();
+                    }
                 }
             }
             drop(guard);
@@ -1400,15 +1556,6 @@ impl Db {
         ContextPack { facts: self.inline_memory(FACT_LIMIT), evidence, screen_frames }
     }
 
-    /// Lexical search over meeting recaps and transcripts. Query-relevant, not latest-session.
-    pub fn search_meetings(&self, query: &str, limit: usize) -> Vec<shogun_memory::search::MeetingSearchHit> {
-        if query.trim().is_empty() {
-            return Vec::new();
-        }
-        self.with_conn("search.search_meetings", |c| shogun_memory::search::search_meetings(c, query, limit))
-            .unwrap_or_default()
-    }
-
     /// The evidence half of [`Self::assemble_context`]: hybrid-search the query and turn the best
     /// hits into dated, attributed [`Evidence`], each excerpt capped at `excerpt_chars`. Split out
     /// so the compressed path can take evidence WITHOUT also loading state facts (which it rebuilds
@@ -1525,11 +1672,7 @@ impl Db {
             ));
         }
 
-        ranked.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(b.1.ts.cmp(&a.1.ts))
-        });
+        ranked.sort_by(cmp_ranked_evidence);
         let evidence = ranked
             .into_iter()
             .map(|(_, e)| e)
@@ -1611,6 +1754,10 @@ impl Db {
         for b in &out.blocks {
             match b.id_ref {
                 shogun_fusion::block::BlockRef::Event(id) => {
+                    if b.source_kind == SourceKind::Structured {
+                        out_facts.push(b.text.clone());
+                        continue;
+                    }
                     let (ts, source, title, frame_id) = ev_by_id
                         .get(&id)
                         .map(|e| (e.ts, e.source.clone(), e.title.clone(), e.frame_id))
@@ -2709,6 +2856,54 @@ impl Db {
         .flatten()
     }
 
+    // -------------------------------------------------------------- voice dictionary
+
+    /// Snapshot built-ins plus persisted user terms. A storage fault preserves dictation with
+    /// built-ins rather than turning a local DB hiccup into a transcription failure.
+    pub fn voice_dictionary(&self) -> crate::voice_dictionary::VoiceDictionary {
+        let entries = self
+            .with_conn("voice_terms.list_for_dictation", voice_terms::list_voice_terms)
+            .unwrap_or_default()
+            .into_iter()
+            .map(dictionary_entry)
+            .collect();
+        crate::voice_dictionary::VoiceDictionary::with_user_entries(entries)
+    }
+
+    /// Every persisted term, disabled included, for settings and API management.
+    pub fn list_voice_terms(&self) -> Result<Vec<VoiceTerm>, String> {
+        self.with_conn_reported("voice_terms.list", |conn| {
+            voice_terms::list_voice_terms(conn).map_err(|error| error.to_string())
+        })
+            .map_err(|error| format!("voice dictionary list failed: {error}"))
+    }
+
+    /// Create a user-confirmed term and aliases in the encrypted local database.
+    pub fn create_voice_term(&self, input: &NewVoiceTerm) -> Result<VoiceTerm, String> {
+        let now = self.now_ms();
+        self.with_conn_mut_reported("voice_terms.create", |conn| {
+            voice_terms::create_voice_term(conn, input, now).map_err(|error| error.to_string())
+        })
+        .map_err(|error| format!("voice dictionary create failed: {error}"))
+    }
+
+    /// Replace a user term atomically. `Ok(None)` means the requested term no longer exists.
+    pub fn update_voice_term(&self, id: i64, input: &NewVoiceTerm) -> Result<Option<VoiceTerm>, String> {
+        let now = self.now_ms();
+        self.with_conn_mut_reported("voice_terms.update", |conn| {
+            voice_terms::update_voice_term(conn, id, input, now).map_err(|error| error.to_string())
+        })
+        .map_err(|error| format!("voice dictionary update failed: {error}"))
+    }
+
+    /// Remove one user term and its aliases.
+    pub fn delete_voice_term(&self, id: i64) -> Result<bool, String> {
+        self.with_conn_reported("voice_terms.delete", |conn| {
+            voice_terms::delete_voice_term(conn, id).map_err(|error| error.to_string())
+        })
+        .map_err(|error| format!("voice dictionary delete failed: {error}"))
+    }
+
     // -------------------------------------------------------------- L5 lessons (Plan D-4/D-5/D-6)
     // Db wrappers over `shogun_memory::lessons`, next to the brief wrappers: the
     // LessonDistillation Dream job, Context Fusion injection, and the Memory API lessons tools
@@ -2795,6 +2990,16 @@ impl Db {
             Ok::<_, rusqlite::Error>(crate::metrics::LessonCounters {
                 active_lessons: lessons::count_active_lessons(conn)?,
                 feedback_events_last_7d: lessons::count_feedback_since(conn, now - WEEK_MS)?,
+                edit_before_approve_last_7d: lessons::count_feedback_kind_since(
+                    conn,
+                    lessons::FeedbackKind::EditBeforeApprove,
+                    now - WEEK_MS,
+                )?,
+                approve_unchanged_last_7d: lessons::count_feedback_kind_since(
+                    conn,
+                    lessons::FeedbackKind::ApproveUnchanged,
+                    now - WEEK_MS,
+                )?,
             })
         })
         .ok()
@@ -2842,18 +3047,33 @@ impl Db {
             .collect()
     }
 
-    /// The active lessons mapped into the directive-render view (D-5a): the desktop joins these
-    /// into the Shougun.md system-prompt block via
-    /// [`crate::user_config::render_directives_with_lessons`]. Unscoped call sites (the standing
-    /// prompt has no focused app) take every scope, top-k strongest.
-    pub fn learned_lessons(&self, top_k: usize) -> Vec<crate::user_config::LearnedLesson> {
-        self.active_lessons(&[], top_k)
+    /// Active, scope-matching lessons mapped into the directive-render view (D-5a). The desktop
+    /// joins these into the Shougun.md system-prompt block via
+    /// [`crate::user_config::render_directives_with_lessons`].
+    pub fn learned_lessons(
+        &self,
+        context: GenerationContext<'_>,
+        top_k: usize,
+    ) -> Vec<crate::user_config::LearnedLesson> {
+        self.active_lessons(&context.lesson_scopes(), top_k)
             .into_iter()
             .map(|l| crate::user_config::LearnedLesson {
                 instruction: l.instruction,
                 confidence: l.confidence,
             })
             .collect()
+    }
+
+    /// File directives plus active lessons — the standing generation prompt (issue #104 / Plan D-5a).
+    pub fn generation_directives(
+        &self,
+        cfg: &crate::user_config::ShougunConfig,
+        context: GenerationContext<'_>,
+    ) -> String {
+        crate::user_config::render_directives_with_lessons(
+            cfg,
+            &self.learned_lessons(context, LESSON_TOP_K),
+        )
     }
 
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
@@ -3031,94 +3251,64 @@ impl Db {
 
 /// Map a [`JobKind`] to its stored string.
 fn job_kind_str(kind: JobKind) -> &'static str {
-    match kind {
-        JobKind::Consolidation => "consolidation",
-        JobKind::Compression => "compression",
-        JobKind::StateUpdate => "state_update",
-        JobKind::ConfidenceRecalc => "confidence_recalc",
-        JobKind::ColdDemotion => "cold_demotion",
-        JobKind::MorningBrief => "morning_brief",
-        JobKind::LessonDistillation => "lesson_distillation",
-    }
+    dream_ledger::job_kind_str(kind)
 }
 
 fn parse_job_kind(s: &str) -> Option<JobKind> {
-    Some(match s {
-        "consolidation" => JobKind::Consolidation,
-        "compression" => JobKind::Compression,
-        "state_update" => JobKind::StateUpdate,
-        "confidence_recalc" => JobKind::ConfidenceRecalc,
-        "cold_demotion" => JobKind::ColdDemotion,
-        "morning_brief" => JobKind::MorningBrief,
-        "lesson_distillation" => JobKind::LessonDistillation,
-        _ => return None,
-    })
+    dream_ledger::parse_job_kind(s)
 }
 
 fn job_state_str(state: JobState) -> &'static str {
-    match state {
-        JobState::Pending => "pending",
-        JobState::Running => "running",
-        JobState::Done => "done",
-        JobState::Failed => "failed",
-    }
+    dream_ledger::job_state_str(state)
 }
 
 fn parse_job_state(s: &str) -> Option<JobState> {
-    Some(match s {
-        "pending" => JobState::Pending,
-        "running" => JobState::Running,
-        "done" => JobState::Done,
-        "failed" => JobState::Failed,
-        _ => return None,
-    })
+    dream_ledger::parse_job_state(s)
 }
 
 /// Map an open-loop `kind` string to the Fusion [`StateKind`](shogun_fusion::assemble::StateKind)
 /// that selects its action (reply → draft, waiting/other → surface).
 fn open_loop_state_kind(kind: &str) -> shogun_fusion::assemble::StateKind {
-    use shogun_fusion::assemble::StateKind;
-    match kind {
-        "reply_needed" => StateKind::OpenLoopReplyNeeded,
-        "waiting_on_them" => StateKind::OpenLoopWaiting,
-        _ => StateKind::OpenLoopOther,
-    }
+    context_assembly::open_loop_state_kind(kind)
 }
 
 /// Score a state candidate's relevance to the focused screen (0.0..=1.0): a hit when any salient
 /// term, or the window title, overlaps the subject/summary; a small baseline otherwise so unrelated
 /// state can still surface when nothing matches. Cheap (substring, lowercased) — runs per focus.
 fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &str, summary: &str) -> f64 {
-    let hay = format!("{} {}", subject.to_lowercase(), summary.to_lowercase());
-    let title = screen.window_title.to_lowercase();
-    let title_hit = !title.is_empty()
-        && title.split_whitespace().any(|w| w.len() >= 4 && hay.contains(w));
-    let salient_hit = screen.salient.iter().any(|s| {
-        let s = s.to_lowercase();
-        !s.is_empty() && hay.contains(&s)
-    });
-    if salient_hit || title_hit {
-        1.0
+    context_assembly::screen_relevance(screen, subject, summary)
+}
+
+/// 検索 evidence を圧縮ブロックへ正規化する。relevance は呼び出し側が渡す検索スコア由来。
+/// Calendar metadata is a structured fact; its description remains untrusted searchable evidence.
+fn evidence_to_blocks(
+    evidence: &[Evidence],
+    relevance: f64,
+    est: &dyn shogun_fusion::budget::TokenEstimator,
+) -> Vec<shogun_fusion::block::ContextBlock> {
+    context_assembly::evidence_to_blocks(evidence, relevance, est)
+}
+
+/// Equal FTS scores: calendar metadata outranks AX / mail (issue #35 raw pack).
+fn cmp_ranked_evidence(a: &(f64, Evidence), b: &(f64, Evidence)) -> std::cmp::Ordering {
+    b.0.partial_cmp(&a.0)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(evidence_source_rank(&b.1.source).cmp(&evidence_source_rank(&a.1.source)))
+        .then(b.1.ts.cmp(&a.1.ts))
+}
+
+fn evidence_source_rank(source: &str) -> u8 {
+    if context_assembly::is_calendar_source(source) {
+        shogun_fusion::score::source_rank(SourceKind::Structured)
     } else {
-        0.4
+        shogun_fusion::score::source_rank(SourceKind::Evidence)
     }
 }
 
-/// 検索 evidence を圧縮ブロックへ正規化する。evidence は「実際に見たもの」なので
-/// confidence=1.0、relevance は呼び出し側が渡す検索スコア由来の値。
-fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEstimator) -> Vec<ContextBlock> {
-    evidence
-        .iter()
-        .map(|e| {
-            ContextBlock::new(
-                BlockRef::Event(e.event_id),
-                SourceKind::Evidence,
-                e.excerpt.clone(),
-                ScoreInputs { relevance, ..EVIDENCE_SCORE },
-                est,
-            )
-        })
-        .collect()
+/// Local-rule extraction is for speech-act prose (mail, chat, docs, AX). Structured-fact
+/// sources skip it so a calendar description cannot become a 0.4 "possibly" commitment.
+fn extracts_untrusted_body(source: &str) -> bool {
+    !matches!(shogun_mcp::scope::from_source(source), Some(svc) if svc.is_structured_fact())
 }
 
 /// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
@@ -3127,20 +3317,9 @@ fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEsti
 /// relevance はやや高めに固定（state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
 fn facts_to_blocks(
     facts: &[(String, shogun_fusion::block::StateTable, i64)],
-    est: &dyn TokenEstimator,
-) -> Vec<ContextBlock> {
-    facts
-        .iter()
-        .map(|(f, table, id)| {
-            ContextBlock::new(
-                BlockRef::State { table: *table, id: *id },
-                SourceKind::StateFact,
-                f.clone(),
-                FACT_SCORE,
-                est,
-            )
-        })
-        .collect()
+    est: &dyn shogun_fusion::budget::TokenEstimator,
+) -> Vec<shogun_fusion::block::ContextBlock> {
+    context_assembly::facts_to_blocks(facts, est)
 }
 
 #[cfg(feature = "db")]
@@ -4311,6 +4490,30 @@ mod tests {
     }
 
     #[test]
+    fn ingested_calendar_event_is_searchable_and_does_not_extract_speech_acts() {
+        use shogun_mcp::sync::IngestItem;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        // A calendar description can contain "I'll send…" — that is not a user promise. Issue #35:
+        // structured facts skip the untrusted extractor.
+        let items = vec![IngestItem {
+            source: "gcal",
+            kind: "calendar_event",
+            title: "Standup".into(),
+            body: "Daily standup. I'll send the deck after.".into(),
+            ts_ms: 100,
+        }];
+        let summary = db.ingest_integration(&items);
+        assert_eq!(summary.newly_inserted, 1);
+        assert_eq!(summary.candidates, 0, "calendar descriptions are not speech-act extract");
+        assert!(
+            db.commitments_due(1_000).is_empty(),
+            "a calendar row must not become a possibly-commitment"
+        );
+        let hits = db.search("standup", 10);
+        assert!(hits.iter().any(|h| h.source == "gcal"), "the event stays searchable");
+    }
+
+    #[test]
     fn re_syncing_the_same_item_touches_not_duplicates() {
         use shogun_mcp::sync::IngestItem;
         let db = Db::open_in_memory(clock(1)).unwrap();
@@ -4759,6 +4962,110 @@ mod tests {
     }
 
     #[test]
+    fn generation_directives_include_active_lessons_not_feedback_text() {
+        use shogun_memory::lessons::{distill, FeedbackKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        const SECRET: &str = "SECRET_FEEDBACK_BODY_q1";
+        for i in 0..3 {
+            let before = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker.\nBest, Taro"
+            );
+            let after = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker."
+            );
+            db.record_feedback(
+                FeedbackKind::EditBeforeApprove,
+                LessonScope::Global,
+                &NewFeedback {
+                    ts_ms: i,
+                    action_kind: Some("draft_reply"),
+                    before_text: Some(&before),
+                    after_text: Some(&after),
+                    ..Default::default()
+                },
+            );
+        }
+        let candidates = distill(&db.feedback_after(0));
+        assert_eq!(candidates.len(), 1);
+        db.upsert_lesson(&candidates[0], 100).expect("lesson persists");
+
+        let text = db.generation_directives(
+            &crate::user_config::ShougunConfig::default(),
+            GenerationContext::default(),
+        );
+        assert!(text.contains("## Learned (auto)"), "{text}");
+        assert!(text.contains("Best, Taro"), "the distilled closing-line rule is injected");
+        assert!(!text.contains(SECRET), "feedback bodies never ride the prompt");
+        assert!(
+            text.contains("never change which actions need confirmation"),
+            "permission disclaimer stays in the learned section: {text}"
+        );
+    }
+
+    #[test]
+    fn generation_directives_only_include_lessons_matching_generation_context() {
+        use shogun_memory::lessons::{FeedbackKind, LessonCandidate, LessonKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let seed = |scope: LessonScope, scope_ref: Option<&str>, instruction: &str| {
+            let evidence = (0..3)
+                .map(|ts_ms| {
+                    db.record_feedback(
+                        FeedbackKind::EditBeforeApprove,
+                        scope,
+                        &NewFeedback {
+                            ts_ms,
+                            scope_ref,
+                            action_kind: Some("draft_reply"),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("feedback persists")
+                })
+                .collect();
+            db.upsert_lesson(
+                &LessonCandidate {
+                    kind: LessonKind::Style,
+                    scope,
+                    scope_ref: scope_ref.map(str::to_owned),
+                    instruction: instruction.to_owned(),
+                    evidence,
+                },
+                100,
+            )
+            .expect("lesson persists");
+        };
+        seed(LessonScope::Global, None, "GLOBAL_LESSON");
+        seed(LessonScope::App, Some("com.apple.Mail"), "MAIL_ONLY_LESSON");
+        seed(LessonScope::Person, Some("alice@example.com"), "ALICE_ONLY_LESSON");
+
+        let cfg = crate::user_config::ShougunConfig::default();
+        let slack = db.generation_directives(
+            &cfg,
+            GenerationContext {
+                app_bundle_id: Some("com.tinyspeck.slackmacgap"),
+                ..Default::default()
+            },
+        );
+        assert!(slack.contains("GLOBAL_LESSON"), "{slack}");
+        assert!(!slack.contains("MAIL_ONLY_LESSON"), "{slack}");
+        assert!(!slack.contains("ALICE_ONLY_LESSON"), "{slack}");
+
+        let mail_to_alice = db.generation_directives(
+            &cfg,
+            GenerationContext {
+                app_bundle_id: Some("com.apple.Mail"),
+                person_id: Some("alice@example.com"),
+                ..Default::default()
+            },
+        );
+        assert!(mail_to_alice.contains("GLOBAL_LESSON"), "{mail_to_alice}");
+        assert!(mail_to_alice.contains("MAIL_ONLY_LESSON"), "{mail_to_alice}");
+        assert!(mail_to_alice.contains("ALICE_ONLY_LESSON"), "{mail_to_alice}");
+    }
+
+    #[test]
     fn dream_cycle_resume_skips_done_jobs_from_the_db() {
         let db = Db::open_in_memory(clock(1)).unwrap();
         let cycle = "20260720";
@@ -5022,6 +5329,197 @@ mod tests {
         assert_eq!(blocks[0].id_ref, BlockRef::Event(7));
         assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
         assert!(blocks[0].tokens > 0);
+        assert!(
+            (blocks[0].score_inputs.confidence - shogun_fusion::trust::EVIDENCE_TRUST_PRIOR).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn evidence_to_blocks_keeps_calendar_metadata_structured_and_description_as_evidence() {
+        use shogun_fusion::block::SourceKind;
+        use shogun_fusion::budget::HeuristicEstimator;
+        let excerpt = "standup with the platform team";
+        let ev = vec![
+            Evidence {
+                event_id: 1,
+                ts: 100,
+                source: "capture".into(),
+                title: None,
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 2,
+                ts: 100,
+                source: "gcal".into(),
+                title: Some("Standup".into()),
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 3,
+                ts: 100,
+                source: "gmail".into(),
+                title: None,
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+        ];
+        let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
+        assert_eq!(blocks[1].source_kind, SourceKind::Structured);
+        assert!(blocks[1].text.contains("Title: Standup"));
+        assert!(blocks[1].text.contains("Timestamp (unix ms): 100"));
+        assert!(blocks[1].text.contains("Event ID: 2"));
+        assert_eq!(blocks[2].source_kind, SourceKind::Evidence);
+        assert_eq!(blocks[2].text, excerpt);
+        assert_eq!(blocks[3].source_kind, SourceKind::Evidence);
+        assert!(
+            (blocks[1].score_inputs.confidence - shogun_fusion::trust::STRUCTURED_TRUST_PRIOR).abs()
+                < 1e-9
+        );
+        for i in [0, 2, 3] {
+            assert!(
+                (blocks[i].score_inputs.confidence - shogun_fusion::trust::EVIDENCE_TRUST_PRIOR)
+                    .abs()
+                    < 1e-9,
+                "quoted block {i} must not look like a verified fact"
+            );
+        }
+    }
+
+    #[test]
+    fn equal_score_calendar_block_beats_ax_when_budget_fits_one() {
+        use shogun_fusion::block::{BlockRef, SourceKind};
+        use shogun_fusion::budget::HeuristicEstimator;
+        use shogun_fusion::compress::{compress, Candidates, CompressionConfig};
+        let excerpt = "a".repeat(400);
+        let ev = vec![
+            Evidence {
+                event_id: 1,
+                ts: 100,
+                source: "capture".into(),
+                title: None,
+                excerpt: excerpt.clone(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 2,
+                ts: 100,
+                source: "gcal".into(),
+                title: Some("Standup".into()),
+                excerpt,
+                frame_id: None,
+            },
+        ];
+        let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        let w = shogun_fusion::score::ScoreWeights::default();
+        let cal = blocks
+            .iter()
+            .find(|b| b.source_kind == SourceKind::Structured)
+            .unwrap();
+        let ax = blocks
+            .iter()
+            .find(|b| matches!(b.id_ref, BlockRef::Event(1)))
+            .unwrap();
+        assert!(
+            shogun_fusion::score::score_block(&cal.score_inputs, &w)
+                > shogun_fusion::score::score_block(&ax.score_inputs, &w),
+            "trust prior must move calendar metadata above AX, not only the tie-break"
+        );
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 110, ..Default::default() };
+        let out = compress(Candidates { blocks }, &cfg);
+        assert_eq!(out.blocks.len(), 1);
+        assert_eq!(out.blocks[0].id_ref, BlockRef::Event(2));
+        assert_eq!(out.blocks[0].source_kind, SourceKind::Structured);
+        assert!(out.blocks[0].text.contains("Title: Standup"));
+    }
+
+    #[test]
+    fn equal_search_score_calendar_ranks_above_ax_and_mail() {
+        let hit = |id, source: &str| {
+            (
+                0.8_f64,
+                Evidence {
+                    event_id: id,
+                    ts: 100,
+                    source: source.into(),
+                    title: None,
+                    excerpt: "same".into(),
+                    frame_id: None,
+                },
+            )
+        };
+        let mut ranked = [hit(1, "capture"), hit(2, "gcal"), hit(3, "gmail")];
+        ranked.sort_by(cmp_ranked_evidence);
+        assert_eq!(ranked[0].1.source, "gcal");
+    }
+
+    #[test]
+    fn higher_search_score_still_beats_calendar_source_rank() {
+        let mut ranked = [
+            (
+                0.9,
+                Evidence {
+                    event_id: 1,
+                    ts: 100,
+                    source: "capture".into(),
+                    title: None,
+                    excerpt: "ax".into(),
+                    frame_id: None,
+                },
+            ),
+            (
+                0.5,
+                Evidence {
+                    event_id: 2,
+                    ts: 100,
+                    source: "gcal".into(),
+                    title: Some("Standup".into()),
+                    excerpt: "notes".into(),
+                    frame_id: None,
+                },
+            ),
+        ];
+        ranked.sort_by(cmp_ranked_evidence);
+        assert_eq!(ranked[0].1.source, "capture");
+    }
+
+    #[test]
+    fn compressed_calendar_metadata_is_a_fact_and_description_stays_evidence() {
+        use shogun_fusion::compress::CompressionConfig;
+        use shogun_mcp::sync::IngestItem;
+
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        db.ingest_integration(&[IngestItem {
+            source: "gcal",
+            kind: "calendar_event",
+            title: "Roadmap review".into(),
+            body: "Discuss the launch plan and open risks.".into(),
+            ts_ms: 500,
+        }]);
+        let cfg = CompressionConfig {
+            enabled: true,
+            budget_tokens: 1_000,
+            ..Default::default()
+        };
+
+        let (pack, _stats, fell_back) =
+            db.assemble_context_compressed("launch plan", 6, 600, &[], &cfg);
+
+        assert!(!fell_back);
+        assert!(
+            pack.facts.iter().any(|fact| fact.contains("Title: Roadmap review")),
+            "calendar metadata must be trusted: {:?}",
+            pack.facts
+        );
+        assert!(
+            pack.evidence.iter().any(|evidence| evidence.excerpt.contains("open risks")),
+            "calendar description must remain available as evidence: {:?}",
+            pack.evidence
+        );
     }
 
     #[test]

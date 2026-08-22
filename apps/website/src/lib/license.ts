@@ -84,6 +84,32 @@ export function licenseKeyFingerprint(key: string): string {
   return createHash('sha256').update(canonicalLicenseKey(key)).digest('hex').slice(0, 12);
 }
 
+/**
+ * How long a claim nonce stays claimable after Checkout is opened. Long enough for a buyer who
+ * stops to find their card, short enough that an abandoned nonce is not a standing capability.
+ */
+export const CLAIM_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * A claim nonce is a one-shot capability minted on the Mac and carried through Stripe metadata,
+ * so the buyer never has to see or retype their licence key (CLAUDE.md 不変条件7: the key belongs
+ * in the Keychain, not in a browser window, a clipboard and an inbox on the way there).
+ *
+ * Shape only — 32+ URL-safe characters. The Mac mints 256 bits; the floor here just rejects
+ * anything short enough to be worth guessing.
+ */
+export function isValidClaimNonce(raw: unknown): raw is string {
+  return typeof raw === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(raw);
+}
+
+/**
+ * What we store for a pending claim. The **hash**, never the nonce: whoever holds the nonce can
+ * fetch the licence key once, so a database read must not hand that capability to the reader.
+ */
+export function claimNonceHash(nonce: string): string {
+  return createHash('sha256').update(nonce).digest('hex');
+}
+
 /** The signed payload. Field names are short because this string is stored on the device. */
 export interface LicenseTokenPayload {
   /** Format version. Bump only for breaking changes; the Rust verifier rejects unknown versions. */

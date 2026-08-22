@@ -295,6 +295,10 @@ impl SloRegistry {
 pub struct LessonCounters {
     pub active_lessons: i64,
     pub feedback_events_last_7d: i64,
+    /// Approval-time edits in the window — the distill input (designs §5.5).
+    pub edit_before_approve_last_7d: i64,
+    /// Unchanged approvals in the window — the "took the draft as-is" rate numerator.
+    pub approve_unchanged_last_7d: i64,
 }
 
 /// Last-assemble compression snapshot for `shogun metrics` / `GET /v1/metrics`. Counts only —
@@ -412,8 +416,11 @@ pub fn render_snapshots_json_with_lessons_harness_and_sanitizer(
 fn lessons_json(lessons: Option<LessonCounters>) -> String {
     match lessons {
         Some(c) => format!(
-            r#"{{"active_lessons":{},"feedback_events_last_7d":{},"measured":true}}"#,
-            c.active_lessons, c.feedback_events_last_7d
+            r#"{{"active_lessons":{},"feedback_events_last_7d":{},"edit_before_approve_last_7d":{},"approve_unchanged_last_7d":{},"lesson_hit_rate":{{"measured":false}},"measured":true}}"#,
+            c.active_lessons,
+            c.feedback_events_last_7d,
+            c.edit_before_approve_last_7d,
+            c.approve_unchanged_last_7d
         ),
         None => r#"{"measured":false}"#.to_string(),
     }
@@ -643,9 +650,14 @@ mod tests {
         // computable counters render with measured:true
         let json = render_snapshots_json_with_lessons(
             &snaps,
-            Some(LessonCounters { active_lessons: 3, feedback_events_last_7d: 12 }),
+            Some(LessonCounters {
+                active_lessons: 3,
+                feedback_events_last_7d: 12,
+                edit_before_approve_last_7d: 4,
+                approve_unchanged_last_7d: 8,
+            }),
         );
-        assert!(json.contains(r#""lessons":{"active_lessons":3,"feedback_events_last_7d":12,"measured":true}"#), "{json}");
+        assert!(json.contains(r#""lessons":{"active_lessons":3,"feedback_events_last_7d":12,"edit_before_approve_last_7d":4,"approve_unchanged_last_7d":8,"lesson_hit_rate":{"measured":false},"measured":true}"#), "{json}");
         assert!(json.starts_with(r#"{"metrics":["#));
         // not computable → measured:false, never a fabricated zero
         let json = render_snapshots_json_with_lessons(&snaps, None);

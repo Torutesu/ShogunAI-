@@ -414,9 +414,7 @@ mod mac {
                 );
                 match db.purge_screen_frames(retention_ms) {
                     Ok(removed) if removed > 0 => {
-                        eprintln!(
-                            "[screen_ocr] startup purge removed {removed} expired frame(s)"
-                        );
+                        eprintln!("[screen_ocr] startup purge removed {removed} expired frame(s)");
                     }
                     Ok(_) => {}
                     Err(e) => eprintln!("[screen_ocr] startup retention purge failed: {e}"),

@@ -1,0 +1,134 @@
+---
+title: 'The shogun was never a king — and that is why we took the name'
+description: 'For seven hundred years the strongest power in Japan belonged to someone who held it on loan. That separation — legitimacy entrusted, execution taken on — is the piece missing from most software that acts on your behalf.'
+date: '2026-08-20'
+category: 'Ideas'
+author: 'ShogunAI'
+image: '/images/blog/shogun-never-a-king-wide.jpg'
+---
+
+## Never a king
+
+Say *shogun* and most people picture black armour and absolute rule. The warlord who owned Japan.
+
+The historical shogun was not a king. There was always an emperor, and no shogun ever replaced him. For roughly seven hundred years, the strongest office in the country remained an office that held its authority on loan. That is strange by the standards of most histories: whoever takes power usually takes the legitimacy with it. Japan's warrior governments never did. They kept the split — **legitimacy is entrusted, execution is taken on** — for seven centuries.
+
+We did not name the product after the armour. We named it after the split, because it is the idea most obviously missing from software that acts on its own.
+
+What follows is history, and it is also a design document. It ends up being about what "delegate" is going to mean.
+
+## 1. An office you gave back when the job was done
+
+![Authority has a scope: the shogun was defined by mission, scope and duration](/images/blog/shogun-authority-has-a-scope.png)
+
+The full title was *sei-i tai-shōgun* — commander-in-chief for subduing the eastern peoples. The court created it late in the eighth century to send armies north, and it was **temporary by construction**. Ōtomo no Otomaro was appointed in 794, Sakanoue no Tamuramaro in 797.
+
+What matters is that the office was defined by a **mission**. Wide discretion for the length of the campaign, handed back at the end. Not a permanent rank: a stated purpose, a bounded scope, an expiry. Tamuramaro pacified the north, returned to the capital, and died a courtier rather than a shogun.
+
+That is the first thing to settle when you hand work to an agent. What, how far, until when. "It does everything for you" sounds generous, but it is not a definition of an office — and undefined authority is authority nobody dares to invoke. Most agents today are not failing on capability. They are failing to be **called at all**. People don't hand work to something whose blast radius they can't state.
+
+So execution here is always a **summoned unit**. It reads the situation from what is on your screen, proposes what can be done, acts on approval, and ends.
+
+That is the starting point, not the destination. Tamuramaro did not send a rider back to the capital before every skirmish. Because the mission and its scope were defined, he could use his own judgement inside them. **Discretion is grantable precisely because it is bounded.**
+
+That is where this is going. Today you approve each move. Eventually what you approve is the office rather than the move — what, how far, until when — and inside those bounds the work stands up, runs to completion, and stands down.
+
+That is the execution half. There is a second layer running on an entirely different clock, and it gets its own chapter, because the shogunate ran on two clocks too.
+
+## 2. Power does not come from the title
+
+![Infrastructure before title: the network of provincial governors and stewards existed before the title arrived](/images/blog/shogun-infrastructure-before-title.png)
+
+The turn comes at the end of the twelfth century, with Minamoto no Yoritomo.
+
+He was appointed shogun in 1192, but the power did not come from the appointment. The order ran the other way. By 1185 he had already secured the right to install **shugo and jitō** — provincial governors and estate stewards — across the country: military, policing and tax appointments in his hands. The machinery of government existed first. The old court title was fitted over it afterwards.
+
+Textbooks increasingly date the Kamakura shogunate to 1185 rather than 1192 for exactly this reason. The scholarship has ruled on it: **the institution precedes the name.**
+
+Product order is the same. You can put the words "AI assistant" up front and fill in the middle later. It demos well. But an assistant with no machinery under it is one of the many title-only shoguns before Yoritomo — governing nothing.
+
+We built it the other way round. The machinery goes first: **where the information comes from, how it is kept, and what may be touched.** The name can come later.
+
+## 3. Decisions above, execution below
+
+![Decisions above, execution below: the shogun was the interface of authority, not the source of intention](/images/blog/shogun-decision-and-execution.png)
+
+The shogun had the army. He kept the emperor anyway — less out of reverence than because the arrangement was **structurally cheaper**.
+
+Manufacturing legitimacy from nothing is expensive. Take it by appointment from an emperor who already has it, and the warriors of the country fall in line. The shogun skipped the cost of being legitimate and spent everything on execution. From the mid-Edo period the arrangement was theorised outright as *taisei inin* — the shogun governs by delegation from the emperor.
+
+The shogun, in other words, was an **interface of authority**. Legitimacy in from above, execution out below. He did not need to be the source of intention. Not being the source is what kept the office alive for seven hundred years.
+
+This is the part today's agent products handle most carelessly. The louder the autonomy, the blurrier the answer to "who decided this?" The pitch is usually a world where the agent sends the mail, books the slot and makes the purchase on its own — a world where the location of the decision has dissolved. Dissolved decisions land back on the human eventually. The liability returns; the reasoning does not.
+
+We keep decision and execution apart. The policy belongs to the person using it; our side takes an intention it has been handed and executes it exactly. That is not a cap on capability, it is the definition of the office. The good shogun was not the one who imposed his own will — he was **the one who did not misread the intention he was given**.
+
+Giving up being the source of intention makes the office stronger, not weaker. Yoritomo proved it.
+
+## 4. What carried 260 years was the record
+
+![Memory outlives the mission: permanent records against temporary execution](/images/blog/shogun-memory-outlives-the-mission.png)
+
+The Edo shogunate is the office as a finished institution. The *buke shohatto* regulated what the lords could do; *sankin-kōtai*, formalised in 1635, kept them cycling between their domains and the capital.
+
+But the thing that actually ran the day was not force. It was the **record**.
+
+When a matter reached the senior councillors, the **okuyūhitsu** — the secretariat — pulled comparable cases from the archive and attached the precedents. The judgement did not descend from an individual's brilliance; it was derived from what had accumulated. Go back further and the Goseibai Shikimoku of 1232 is the same instinct: warrior custom and case law, written down. This was a government that ran on records from beginning to end.
+
+Which surfaces the thing worth noticing. The shogunate ran on **two clocks**.
+
+One is campaign time: stood up per mission, gone when it ends — the temporary clock from chapter one. The other is record time. The secretariat wrote every day, campaign or no campaign. An office that starts keeping records when the incident begins has no precedent to pull. **The record is permanent; execution is temporary.** That asymmetry is the design, and it is why a mediocre shogun still presided over 260 stable years. What held the system up was not personal capability but the depth of the archive and the procedure for querying it.
+
+ShogunAI has both clocks, unchanged.
+
+**The memory layer runs continuously.** While you work, it passively keeps what is actually happening on screen — the mail you read, the document you wrote, the chat you had, the order you moved between them. Not by recording your screen. It takes the text and its structure through what the operating system already exposes, and keeps it on your machine. Where a window hands over no text at all, an opt-in setting fills that gap with a compressed screenshot that stays encrypted on the Mac and deletes itself at the retention age you chose. Like the secretariat, memory cannot be started after the fact.
+
+**The execution layer stands up per mission.** Summoned, it pulls precedent from memory, acts on approval, and ends.
+
+When an AI disappoints you on a real task, the missing piece is rarely intelligence. It is **precedent**: who you are, what you and this person have already exchanged, how this particular thing came to be shaped the way it is. As long as you re-explain it every morning, you don't have a capable colleague — you have an endless procession of first-day hires.
+
+So the first thing we built was not an application. It was the record layer underneath one. Make precedent available, then act. There is no other order.
+
+## 5. "Bakufu" means a field headquarters
+
+![The interface should be temporary: assemble, execute, dissolve](/images/blog/shogun-interface-is-temporary.png)
+
+The word *bakufu* settled into use later. *Baku* is the curtain of the field tent a shogun raised on campaign — a **temporary structure**. A government that ran Japan for seven centuries was, to the end, called the headquarters-on-the-road. It built Edo Castle and still kept the provisional name. History rarely writes itself that neatly.
+
+Our interface sits in that position.
+
+We are not asking anyone to move into a new app. We put a thin layer in front of the tools you already use, and only when it is needed. One key brings it up, it works from the context of what you are looking at, and it goes away. Not a building — the tent you pitch where the work is.
+
+The application layer, though, is not a reissue of what already exists. Turning a CRM, a mail client or a chat app "into AI" is fitting an engine to an ox cart. Because the record layer comes first, whatever sits on top of it **can be designed from scratch for what is now possible**. In the other order it cannot: today's app shapes are optimised for software that remembers nothing.
+
+## 6. A delegation you cannot revoke is not a delegation
+
+![Delegation must be reversible: delegate, execute, return](/images/blog/shogun-delegation-must-be-reversible.png)
+
+The last shogun, Tokugawa Yoshinobu, performed the *taisei hōkan* in October 1867: he returned governing authority to the court. That December the office itself was abolished.
+
+That the end took the form of a **return** rather than a defeat is not an accident. It could be handed back because it had been held on loan. The premise that the shogun's power was delegated, maintained for seven hundred years, determined the shape of its ending. How a thing begins decides how it can end.
+
+This is what we are most serious about in software that acts by itself. **Authority you hand over has to be recoverable at any time.**
+
+Concretely, three forms. Every judgement traceable afterwards to what it was based on. Initiative for execution always on the human side. And no lock to a single model, with the keys and the data staying with the person using them. Authority parked entirely with one vendor has nowhere to be returned from. A delegation that cannot be revoked is not a delegation, it is a transfer — and the moment you transfer it you stop being a user and become a subject.
+
+It began as a temporary office you returned when the job was done, became an institution where it was not returned, and ended where it was. Seven hundred years. The properties we want to keep are the first and the last: **stand up when called, end by handing back.**
+
+## Coda — intelligence is borrowed, memory is built
+
+![Intelligence is borrowed, memory is built: models change, the records remain](/images/blog/shogun-intelligence-borrowed-memory-built.png)
+
+One last thing: why this argument, now.
+
+Model intelligence is going to be a commodity within a few years. Every product will pull the same grade of it from the same APIs. What separates products then will not be intelligence. It will be **whose context that intelligence runs on**.
+
+The shogunate answers this directly. The personal calibre of the shogun swung wildly across generations — able rulers, and men who barely governed at all. The system continued because the parts that did not depend on calibre — records, precedent, procedure — had accumulated into an institution. **Prestige is borrowed; institutions are built.** Give back what you borrowed and it is gone. What you built stays.
+
+For an AI product, model intelligence is the borrowed prestige. It arrives from outside and is swapped for something stronger tomorrow. What accumulates is the memory: the context of your work, how decisions were reached, the precedent you have with each person. It survives the model swap, it thickens with time, and — this is the part that matters — **as long as it sits on your machine, it stays yours**.
+
+We are not selling intelligence. We are building an institution on your side of the table.
+
+You decide. We remember, and we act.
+
+**ShogunAI — Your AI has memory. Now it acts.**

@@ -9,6 +9,32 @@ pub mod system_tap;
 
 use super::Speaker;
 
+/// Resolve `selected` to the one device that bears that name. Missing and ambiguous both fail:
+/// neither may quietly resolve to some other input.
+///
+/// Lives on the seam rather than in `mic` so it compiles — and its tests run — on every platform:
+/// `mic` is behind `audio` + macOS, so anything inside it is invisible to both CI jobs. Generic
+/// over the device type so a test can hand it plain strings instead of real hardware.
+pub fn find_named_device<D>(
+    devices: impl Iterator<Item = (String, D)>,
+    selected: &str,
+) -> Result<D, String> {
+    // Lazily, and with no panicking call on the capture path: stop as soon as a second match
+    // proves the name ambiguous, rather than collecting every device first.
+    let mut matches = devices
+        .filter(|(name, _)| name == selected)
+        .map(|(_, device)| device);
+    let Some(device) = matches.next() else {
+        return Err(format!("selected microphone is unavailable: {selected}"));
+    };
+    if matches.next().is_some() {
+        return Err(format!(
+            "selected microphone name is ambiguous: {selected}; choose a different input"
+        ));
+    }
+    Ok(device)
+}
+
 /// A frame of already-resampled 16 kHz mono audio from one source.
 pub struct Frame {
     pub speaker: Speaker,
@@ -83,6 +109,38 @@ impl AudioSource for FakeSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn devices(names: &[&str]) -> Vec<(String, String)> {
+        names.iter().map(|n| ((*n).into(), (*n).into())).collect()
+    }
+
+    #[test]
+    fn missing_selected_device_is_an_error_not_a_fallback() {
+        let error = find_named_device(devices(&["Built-in Microphone"]).into_iter(), "Studio Mic")
+            .expect_err("an unplugged selection must not resolve to another input");
+        assert!(error.contains("Studio Mic"), "error names the device: {error}");
+    }
+
+    #[test]
+    fn selected_device_resolves_by_exact_name() {
+        let picked = find_named_device(
+            devices(&["Built-in Microphone", "Studio Mic"]).into_iter(),
+            "Studio Mic",
+        )
+        .expect("a connected selection resolves");
+        assert_eq!(picked, "Studio Mic");
+    }
+
+    #[test]
+    fn duplicate_names_are_rejected_instead_of_selecting_arbitrarily() {
+        let candidates = vec![
+            ("Studio Mic".to_string(), "first"),
+            ("Studio Mic".to_string(), "second"),
+        ];
+        let error = find_named_device(candidates.into_iter(), "Studio Mic")
+            .expect_err("an ambiguous device name must not select an arbitrary microphone");
+        assert!(error.contains("ambiguous"), "error explains the ambiguity: {error}");
+    }
 
     #[test]
     fn fake_yields_frames_then_empty() {

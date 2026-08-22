@@ -12,3 +12,6 @@ build/
 next-env.d.ts
 .tsbuildinfo
 *.tsbuildinfo
+
+# Generated from apps/desktop by scripts/build-app-demo.mjs
+public/app-demo/

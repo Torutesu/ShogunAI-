@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, verify as cryptoVerify } from 'node:crypto';
 import { test } from 'node:test';
 
 import {
@@ -10,15 +10,19 @@ import {
   type StripeSubscriptionLike,
 } from '../src/lib/billing.ts';
 import {
+  CLAIM_TTL_MS,
   buildTokenPayload,
   canonicalLicenseKey,
+  claimNonceHash,
   generateLicenseKey,
+  isValidClaimNonce,
   isValidDeviceId,
   isValidLicenseKey,
   licenseKeyFingerprint,
   signLicenseToken,
 } from '../src/lib/license.ts';
 import { PLANS, formatUsd, planForPriceId, priceIdFor, priceLine } from '../src/lib/pricing.ts';
+import { automaticTaxEnabled, billingReady, buildCheckoutParams } from '../src/lib/stripe.ts';
 
 /**
  * Billing unit tests (issue #8). Everything here is the pure layer — no Stripe account, no DB,
@@ -73,6 +77,129 @@ test('an unconfigured price is null, not a fallback', () => {
   delete process.env.STRIPE_PRICE_PRO_MONTHLY;
   assert.equal(priceIdFor('pro', 'monthly'), null);
   setPrices();
+});
+
+// ── configuration gate ────────────────────────────────────────────────────────
+
+test('billing stays closed until every purchasable combination has a price', () => {
+  // The desktop panel offers standard/pro x annual/monthly. A gate that only checked the annual
+  // pair let a buyer pick monthly and get a 503 while annual quietly worked.
+  process.env.STRIPE_SECRET_KEY = 'sk_test_x';
+  setPrices();
+  assert.equal(billingReady(), true);
+
+  for (const missing of [
+    'STRIPE_PRICE_STANDARD_ANNUAL',
+    'STRIPE_PRICE_STANDARD_MONTHLY',
+    'STRIPE_PRICE_PRO_ANNUAL',
+    'STRIPE_PRICE_PRO_MONTHLY',
+  ]) {
+    const saved = process.env[missing];
+    delete process.env[missing];
+    assert.equal(billingReady(), false, `${missing} missing must close billing`);
+    process.env[missing] = saved;
+  }
+
+  delete process.env.STRIPE_SECRET_KEY;
+  assert.equal(billingReady(), false, 'no secret key must close billing');
+});
+
+test('automatic tax is opt-in, so an unconfigured Stripe account cannot break checkout', () => {
+  delete process.env.STRIPE_AUTOMATIC_TAX;
+  assert.equal(automaticTaxEnabled(), false);
+  process.env.STRIPE_AUTOMATIC_TAX = '0';
+  assert.equal(automaticTaxEnabled(), false);
+  process.env.STRIPE_AUTOMATIC_TAX = 'true';
+  assert.equal(automaticTaxEnabled(), false, 'only an explicit 1 turns it on');
+  process.env.STRIPE_AUTOMATIC_TAX = '1';
+  assert.equal(automaticTaxEnabled(), true);
+  delete process.env.STRIPE_AUTOMATIC_TAX;
+});
+
+// ── checkout session params ───────────────────────────────────────────────────
+
+const checkoutInput = (over: Partial<Parameters<typeof buildCheckoutParams>[0]> = {}) => ({
+  price: 'price_pro_year',
+  plan: 'pro' as const,
+  interval: 'annual' as const,
+  source: 'app',
+  email: null,
+  claimNonce: null,
+  customerId: null,
+  trialDays: 0,
+  automaticTax: false,
+  origin: 'https://shogunaios.com',
+  ...over,
+});
+
+test('a subscription session never sends customer_creation', () => {
+  // Stripe rejects `customer_creation` outside payment/setup mode, and subscription mode creates
+  // the Customer regardless. Sending it 500s *every first-time purchase* — the guest path is the
+  // one nobody exercises in staging, because staging always has a customer already.
+  for (const over of [{}, { email: 'buyer@example.com' }, { customerId: 'cus_1' }]) {
+    const params = buildCheckoutParams(checkoutInput(over)) as Record<string, unknown>;
+    assert.equal(params.mode, 'subscription');
+    assert.ok(
+      !('customer_creation' in params),
+      `customer_creation is illegal in subscription mode (${JSON.stringify(over)})`,
+    );
+  }
+});
+
+test('customer_update only rides along when the session names a customer', () => {
+  // `customer_update` is an API error unless `customer` is set, so the guest + tax combination
+  // must not carry it.
+  const guest = buildCheckoutParams(checkoutInput({ automaticTax: true })) as Record<string, unknown>;
+  assert.ok(!('customer' in guest));
+  assert.ok(!('customer_update' in guest), 'no customer means customer_update is illegal');
+
+  const known = buildCheckoutParams(
+    checkoutInput({ automaticTax: true, customerId: 'cus_1' }),
+  ) as Record<string, unknown>;
+  assert.equal(known.customer, 'cus_1');
+  assert.deepEqual(known.customer_update, { address: 'auto', name: 'auto' });
+
+  const noTax = buildCheckoutParams(checkoutInput({ customerId: 'cus_1' })) as Record<string, unknown>;
+  assert.ok(!('customer_update' in noTax), 'without automatic tax there is nothing to update');
+});
+
+test('a known customer wins over customer_email, so a buyer keeps one portal', () => {
+  const params = buildCheckoutParams(
+    checkoutInput({ email: 'buyer@example.com', customerId: 'cus_1' }),
+  ) as Record<string, unknown>;
+  assert.equal(params.customer, 'cus_1');
+  assert.ok(!('customer_email' in params), 'customer and customer_email together is an API error');
+  assert.equal(params.client_reference_id, 'buyer@example.com');
+});
+
+test('the claim nonce rides in session metadata only when the buying Mac minted one', () => {
+  const withNonce = buildCheckoutParams(checkoutInput({ claimNonce: 'abc' }));
+  assert.equal(withNonce.metadata?.claim_nonce, 'abc');
+  // Never on the subscription: that object outlives the one-shot capability.
+  assert.ok(!('claim_nonce' in (withNonce.subscription_data?.metadata ?? {})));
+
+  const without = buildCheckoutParams(checkoutInput());
+  assert.ok(!('claim_nonce' in (without.metadata ?? {})));
+});
+
+test('the trial is a flag, and the return URLs are absolute', () => {
+  const none = buildCheckoutParams(checkoutInput());
+  assert.ok(!('trial_period_days' in (none.subscription_data ?? {})), '0 means charge immediately');
+
+  const trial = buildCheckoutParams(checkoutInput({ trialDays: 7 }));
+  assert.equal(trial.subscription_data?.trial_period_days, 7);
+
+  assert.equal(
+    trial.success_url,
+    'https://shogunaios.com/billing/success?session_id={CHECKOUT_SESSION_ID}',
+  );
+  assert.equal(trial.cancel_url, 'https://shogunaios.com/#pricing');
+});
+
+test('the price comes from the resolved catalog, never from the caller', () => {
+  setPrices();
+  const params = buildCheckoutParams(checkoutInput({ price: priceIdFor('standard', 'monthly')! }));
+  assert.deepEqual(params.line_items, [{ price: 'price_std_month', quantity: 1 }]);
 });
 
 // ── subscription mapping ──────────────────────────────────────────────────────
@@ -243,4 +370,44 @@ test('the token carries the plan gate and nothing about the person', () => {
   ]);
   assert.ok(payload.exp > payload.iat, 'a token must expire');
   assert.equal(payload.grace_days, 14);
+});
+
+// ── claim nonces ──────────────────────────────────────────────────────────────
+
+test('a claim nonce must be long and opaque, so it cannot be guessed or smuggled', () => {
+  const good = randomBytes(32).toString('base64url');
+  assert.equal(isValidClaimNonce(good), true);
+  assert.equal(good.length >= 32, true, 'a 256-bit nonce clears the floor');
+
+  for (const bad of [
+    '',
+    'short',
+    'a'.repeat(31),
+    'a'.repeat(129),
+    `${'a'.repeat(31)}/`, // not URL-safe: would have to be escaped into Stripe metadata
+    `${'a'.repeat(31)}+`,
+    `${'a'.repeat(31)} `,
+    'a'.repeat(20) + '\n' + 'a'.repeat(20),
+    null,
+    undefined,
+    12345,
+    { toString: () => 'a'.repeat(40) },
+  ]) {
+    assert.equal(isValidClaimNonce(bad), false, `rejects ${JSON.stringify(String(bad))}`);
+  }
+});
+
+test('what we store is the hash, never the nonce itself', () => {
+  const nonce = randomBytes(32).toString('base64url');
+  const hash = claimNonceHash(nonce);
+
+  assert.equal(/^[0-9a-f]{64}$/.test(hash), true, 'sha-256 hex');
+  assert.equal(hash.includes(nonce), false, 'the capability is not recoverable from the row');
+  assert.equal(claimNonceHash(nonce), hash, 'stable, so lookup works');
+  assert.notEqual(claimNonceHash(randomBytes(32).toString('base64url')), hash);
+});
+
+test('the claim window is bounded — an abandoned checkout is not a standing capability', () => {
+  assert.equal(CLAIM_TTL_MS > 0, true);
+  assert.equal(CLAIM_TTL_MS <= 24 * 3600 * 1000, true, 'hours, not days');
 });

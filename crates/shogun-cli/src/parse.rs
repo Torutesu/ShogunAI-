@@ -2,7 +2,7 @@
 //! whole command grammar is unit-testable without spawning a process. Dependency-free (no clap):
 //! the grammar is small and the tests are the spec.
 
-use crate::command::{Command, ConfigAction, ListOrGet};
+use crate::command::{Command, ConfigAction, ListOrGet, VoiceDictionaryCommand};
 
 /// A fully parsed invocation: the command plus global flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +189,29 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
         "onboarding" => Ok(Command::Onboarding),
         "lessons" => parse_lessons(rest),
         "visual-recall" => parse_visual_recall(rest),
+        "voice-dictionary" => match rest.first().map(String::as_str) {
+            Some("list") | None => Ok(Command::VoiceDictionary(VoiceDictionaryCommand::List)),
+            Some("create") => Ok(Command::VoiceDictionary(VoiceDictionaryCommand::Create {
+                term: join(&rest[1..]).ok_or(CliError::MissingArgument("<term-json>"))?,
+            })),
+            Some("update") => {
+                let raw = rest.get(1).ok_or(CliError::MissingArgument("<id>"))?;
+                Ok(Command::VoiceDictionary(VoiceDictionaryCommand::Update {
+                    id: raw.parse().map_err(|_| CliError::BadId(raw.clone()))?,
+                    term: join(&rest[2..]).ok_or(CliError::MissingArgument("<term-json>"))?,
+                }))
+            }
+            Some("delete") => {
+                let raw = rest.get(1).ok_or(CliError::MissingArgument("<id>"))?;
+                Ok(Command::VoiceDictionary(VoiceDictionaryCommand::Delete {
+                    id: raw.parse().map_err(|_| CliError::BadId(raw.clone()))?,
+                }))
+            }
+            Some(other) => Err(CliError::UnknownSubcommand {
+                command: "voice-dictionary",
+                got: other.to_string(),
+            }),
+        },
         "config" => {
             let action = match rest.first().map(String::as_str) {
                 Some("path") => ConfigAction::Path,
@@ -209,7 +232,7 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
 }
 
 fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
-    use crate::command::LessonsCommand;
+    use crate::command::{LessonsCommand, LessonsList};
     let id_arg = |rest: &[String]| -> Result<i64, CliError> {
         let id_str = rest.get(1).ok_or(CliError::MissingArgument("<id>"))?;
         id_str
@@ -217,7 +240,10 @@ fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
             .map_err(|_| CliError::BadId(id_str.clone()))
     };
     match rest.first().map(String::as_str) {
-        None | Some("list") => Ok(Command::Lessons(LessonsCommand::List)),
+        None => Ok(Command::Lessons(LessonsCommand::List(
+            LessonsList::default(),
+        ))),
+        Some("list") => parse_lessons_list(&rest[1..]),
         Some("enable") => Ok(Command::Lessons(LessonsCommand::Enable {
             id: id_arg(rest)?,
         })),
@@ -229,6 +255,48 @@ fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
             got: other.to_string(),
         }),
     }
+}
+
+fn parse_lessons_list(flags: &[String]) -> Result<Command, CliError> {
+    use crate::command::{LessonsCommand, LessonsList};
+    let mut opts = LessonsList::default();
+    let mut i = 0;
+    while i < flags.len() {
+        match flags[i].as_str() {
+            "--for-generation" => {
+                opts.for_generation = true;
+                i += 1;
+            }
+            "--app" => {
+                let v = flags
+                    .get(i + 1)
+                    .ok_or(CliError::MissingFlagValue("--app"))?;
+                opts.app_bundle_id = Some(v.clone());
+                i += 2;
+            }
+            "--person" => {
+                let v = flags
+                    .get(i + 1)
+                    .ok_or(CliError::MissingFlagValue("--person"))?;
+                opts.person_id = Some(v.clone());
+                i += 2;
+            }
+            "--project" => {
+                let v = flags
+                    .get(i + 1)
+                    .ok_or(CliError::MissingFlagValue("--project"))?;
+                opts.project_id = Some(v.clone());
+                i += 2;
+            }
+            other => {
+                return Err(CliError::UnknownSubcommand {
+                    command: "lessons list",
+                    got: other.to_string(),
+                })
+            }
+        }
+    }
+    Ok(Command::Lessons(LessonsCommand::List(opts)))
 }
 
 fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
@@ -245,7 +313,9 @@ fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
                 .ok()
                 .filter(|days| (1..=3_650).contains(days))
                 .ok_or_else(|| CliError::BadRetention(raw.clone()))?;
-            Ok(Command::VisualRecall(VisualRecallCommand::Retention { days }))
+            Ok(Command::VisualRecall(VisualRecallCommand::Retention {
+                days,
+            }))
         }
         Some("search") => {
             let mut from_ms = None;
@@ -459,14 +529,14 @@ mod tests {
 
     #[test]
     fn lessons_grammar_parses_list_enable_disable() {
-        use crate::command::LessonsCommand;
+        use crate::command::{LessonsCommand, LessonsList};
         assert_eq!(
             parse(&v(&["lessons"])).unwrap().command,
-            Command::Lessons(LessonsCommand::List)
+            Command::Lessons(LessonsCommand::List(LessonsList::default()))
         );
         assert_eq!(
             parse(&v(&["lessons", "list"])).unwrap().command,
-            Command::Lessons(LessonsCommand::List)
+            Command::Lessons(LessonsCommand::List(LessonsList::default()))
         );
         assert_eq!(
             parse(&v(&["lessons", "enable", "7"])).unwrap().command,
@@ -475,6 +545,22 @@ mod tests {
         assert_eq!(
             parse(&v(&["lessons", "disable", "7"])).unwrap().command,
             Command::Lessons(LessonsCommand::Disable { id: 7 })
+        );
+        assert_eq!(
+            parse(&v(&[
+                "lessons",
+                "list",
+                "--for-generation",
+                "--person",
+                "alice@example.com",
+            ]))
+            .unwrap()
+            .command,
+            Command::Lessons(LessonsCommand::List(LessonsList {
+                for_generation: true,
+                person_id: Some("alice@example.com".into()),
+                ..LessonsList::default()
+            }))
         );
         assert_eq!(
             parse(&v(&["lessons", "enable"])),

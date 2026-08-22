@@ -9,6 +9,15 @@ use rusqlite::OptionalExtension;
 /// OCR text shorter than this triggers `needs_rescan` on recall hits.
 pub const THIN_OCR_CHARS: usize = 100;
 
+/// Whether `ocr_text` is thin enough to warrant a Vision re-scan.
+///
+/// The one place this is decided: search and `get_frame` are two faces onto the same frame and
+/// must never disagree about it. Characters, not bytes — 34 chars of Japanese OCR is ~102 UTF-8
+/// bytes, and a byte count would skip the re-scan exactly where OCR is weakest (CJK screens).
+pub fn needs_rescan(ocr_text: &str) -> bool {
+    ocr_text.trim().chars().count() < THIN_OCR_CHARS
+}
+
 /// Row to insert after a fresh OCR event is persisted.
 #[derive(Debug, Clone)]
 pub struct NewFrame<'a> {
@@ -320,7 +329,7 @@ pub fn search_for_recall(
 }
 
 fn recall_hit_from_summary(s: &FrameSummary, excerpt_chars: usize) -> FrameRecallHit {
-    let needs_rescan = s.ocr_text.trim().len() < THIN_OCR_CHARS;
+    let needs_rescan = self::needs_rescan(&s.ocr_text);
     FrameRecallHit {
         frame_id: s.id,
         event_id: s.event_id,
@@ -526,5 +535,17 @@ mod tests {
             )
             .unwrap();
         assert!(!event_exists);
+    }
+
+    #[test]
+    fn thin_ocr_is_measured_in_chars_not_bytes() {
+        // ~50 Japanese chars is ~150 UTF-8 bytes: under the 100-CHAR threshold, over the byte
+        // one. Both API faces call this fn, so search and get_frame cannot disagree.
+        let jp = "\u{753b}\u{9762}".repeat(25);
+        assert_eq!(jp.chars().count(), 50);
+        assert!(jp.len() > THIN_OCR_CHARS);
+        assert!(needs_rescan(&jp), "a thin CJK frame must still be re-scanned");
+        assert!(needs_rescan("  short  "));
+        assert!(!needs_rescan(&"a".repeat(THIN_OCR_CHARS)));
     }
 }

@@ -18,6 +18,7 @@ function AwardBanner({
   sizes,
   priority,
   scaleClassName = '',
+  widthClassName = '',
   href,
   linkLabel,
   surfaceClassName = '',
@@ -29,28 +30,29 @@ function AwardBanner({
   sizes: string;
   priority?: boolean;
   scaleClassName?: string;
+  widthClassName?: string;
   href?: string;
   linkLabel?: string;
   surfaceClassName?: string;
 }) {
   const banner = (
-      <div className={`relative flex h-[46px] w-full items-center justify-center sm:h-[72px] ${surfaceClassName}`}>
-        <Image
-          src={src}
-          alt={alt}
-          width={width}
-          height={height}
-          sizes={sizes}
-          priority={priority}
-          className={`h-full w-full object-contain ${scaleClassName}`}
-        />
-      </div>
+    <div className={`relative flex h-full w-full items-center justify-center ${surfaceClassName}`}>
+      <Image
+        src={src}
+        alt={alt}
+        width={width}
+        height={height}
+        sizes={sizes}
+        priority={priority}
+        className={`h-auto max-h-full w-auto max-w-full object-contain ${scaleClassName}`}
+      />
+    </div>
   );
 
-  const content = <div className="flex min-h-[68px] items-center justify-center sm:min-h-[94px]">{banner}</div>;
+  const content = <div className={`flex h-[64px] items-center justify-center sm:h-[96px] ${widthClassName}`}>{banner}</div>;
 
   return href ? (
-    <a href={href} target="_blank" rel="noreferrer" aria-label={linkLabel ?? alt} className="block rounded-[18px] transition-transform hover:-translate-y-0.5">
+    <a href={href} target="_blank" rel="noreferrer" aria-label={linkLabel ?? alt} className="block h-full rounded-[18px] transition-transform hover:-translate-y-0.5">
       {content}
     </a>
   ) : content;
@@ -58,20 +60,20 @@ function AwardBanner({
 
 function ProductHuntBadge() {
   return (
-    <div className="flex min-h-[68px] items-center justify-center sm:min-h-[94px]">
+    <div className="flex h-[64px] items-center justify-center sm:h-[96px]">
       <a
-        href="https://www.producthunt.com/products/shogunai/reviews/new?utm_source=badge-product_review&utm_medium=badge&utm_source=badge-shogunai"
+        href="https://www.producthunt.com/products/shogunai?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-shogunai"
         target="_blank"
-        rel="noreferrer"
-        aria-label="Review ShogunAI on Product Hunt"
-        className="flex items-center justify-center rounded-[18px] transition-transform hover:-translate-y-0.5"
+        rel="noopener noreferrer"
+        aria-label="View ShogunAI on Product Hunt"
+        className="flex h-full items-center justify-center rounded-[18px] transition-transform hover:-translate-y-0.5"
       >
         <img
-          src="/product-hunt-review.svg"
-          alt="ShogunAI - Personal AGI | Product Hunt"
+          src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1228269&theme=light&t=1787296862710"
+          alt="ShogunAI - Your personal AGI on your PC. Built to finish real work. | Product Hunt"
           width={250}
           height={54}
-          className="h-auto w-full max-w-[280px]"
+          className="h-auto max-h-full w-auto max-w-[240px] object-contain sm:max-w-[352px]"
         />
       </a>
     </div>
@@ -114,28 +116,34 @@ export function Badges({ t }: { t: Dictionary }) {
   const ph = t.authority.items.find((b) => b.tone === 'ph');
 
   return (
-    <div className="mx-auto grid w-full max-w-[1260px] grid-cols-3 items-center gap-6 sm:gap-10 lg:gap-16">
-      <AwardBanner
-        src="/optimized/yc-rfs-hackathon-2026.png"
-        alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
-        width={2055}
-        height={765}
-        sizes="(max-width: 1024px) 92vw, 420px"
-        priority
-        scaleClassName="sm:scale-[1.55]"
-        href="https://x.com/toruai/status/2082832405514395962?s=20"
-        linkLabel="Open the YC RFS Hackathon 2026 win announcement on X"
-      />
-      {ph ? <ProductHuntBadge /> : <div />}
-      <AwardBanner
-        src="/badges/nvidia-inception-program.png"
-        alt="NVIDIA Inception Program member badge"
-        width={1221}
-        height={662}
-        sizes="(max-width: 1024px) 92vw, 420px"
-        scaleClassName="sm:scale-[1.5]"
-        surfaceClassName="theme-light-badge"
-      />
+    <div className="mx-auto grid w-full max-w-[560px] grid-cols-2 items-center justify-items-center gap-x-3 gap-y-3 px-2 sm:max-w-[1000px] sm:grid-cols-3 sm:gap-x-12 sm:gap-y-6 sm:px-0">
+      <div className="order-1 flex w-full justify-center sm:order-none">
+        <AwardBanner
+          src="/optimized/yc-rfs-hackathon-2026.png"
+          alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
+          width={2055}
+          height={765}
+          sizes="(max-width: 639px) 46vw, (max-width: 1024px) 30vw, 360px"
+          priority
+          widthClassName="w-full max-w-[180px] sm:max-w-[360px]"
+          href="https://x.com/toruai/status/2082832405514395962?s=20"
+          linkLabel="Open the YC RFS Hackathon 2026 win announcement on X"
+        />
+      </div>
+      <div className="order-3 col-span-2 flex w-full justify-center sm:order-none sm:col-span-1">
+        {ph ? <ProductHuntBadge /> : null}
+      </div>
+      <div className="order-2 flex w-full justify-center sm:order-none">
+        <AwardBanner
+          src="/badges/nvidia-inception-program.png"
+          alt="NVIDIA Inception Program member badge"
+          width={1221}
+          height={662}
+          sizes="(max-width: 639px) 40vw, (max-width: 1024px) 24vw, 262px"
+          widthClassName="w-full max-w-[150px] sm:max-w-[262px]"
+          surfaceClassName="theme-light-badge"
+        />
+      </div>
       <BrandfetchLogoStrip />
     </div>
   );

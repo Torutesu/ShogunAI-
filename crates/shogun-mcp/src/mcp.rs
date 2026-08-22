@@ -22,6 +22,9 @@ use crate::backend::{MemoryBackend, ReadParams};
 use crate::memory_api::{tool_level, ApiLevel, Tool, ALL_TOOLS};
 use crate::rest;
 use crate::visual_recall_api::{is_structured_read, render_structured};
+use crate::voice_dictionary_api::{
+    parse_term, render as render_voice_dictionary, VoiceDictionaryOperation,
+};
 
 /// The MCP protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -166,44 +169,102 @@ impl<B: MemoryBackend> McpServer<B> {
 
         let text = match tool_level(tool) {
             ApiLevel::Read => {
-                let read_params = ReadParams {
-                    id: args.get("id").and_then(Value::as_i64),
-                    query: args
-                        .get("query")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    from_ms: args.get("from_ms").and_then(Value::as_i64),
-                    to_ms: args.get("to_ms").and_then(Value::as_i64),
-                };
-                if is_structured_read(tool) {
-                    self.backend
-                        .read_structured(tool, &read_params)
-                        .map(|json| render_structured(tool, &json))
-                        .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string())
+                if tool == Tool::VoiceDictionaryList {
+                    match self
+                        .backend
+                        .manage_voice_dictionary(VoiceDictionaryOperation::List)
+                    {
+                        Ok(value) => render_voice_dictionary(value),
+                        Err(_) => return error(id, -32000, "voice dictionary unavailable"),
+                    }
                 } else {
-                    let include_low = args
-                        .get("include_low")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    let items = self.backend.read(tool, &read_params);
-                    rest::render_reads(tool, &items, include_low)
+                    let read_params = ReadParams {
+                        id: args.get("id").and_then(Value::as_i64),
+                        query: args
+                            .get("query")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        from_ms: args.get("from_ms").and_then(Value::as_i64),
+                        to_ms: args.get("to_ms").and_then(Value::as_i64),
+                        for_generation: args
+                            .get("for_generation")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        app_bundle_id: args
+                            .get("app_bundle_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        person_id: args
+                            .get("person_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        project_id: args
+                            .get("project_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    };
+                    if is_structured_read(tool) {
+                        self.backend
+                            .read_structured(tool, &read_params)
+                            .map(|json| render_structured(tool, &json))
+                            .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string())
+                    } else {
+                        let include_low = args
+                            .get("include_low")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let items = self.backend.read(tool, &read_params);
+                        rest::render_reads(tool, &items, include_low)
+                    }
                 }
             }
             ApiLevel::Write(_) => {
-                let body = if tool == Tool::MemoryAppendNote {
-                    args.get("text")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string()
-                } else {
-                    // VisualRecallSetEnabled / VisualRecallDeleteFrame / StateProposeUpdate /
-                    // LessonsSetActive all take the raw JSON args as the body.
-                    args.to_string()
+                let operation = match tool {
+                    Tool::VoiceDictionaryCreate => {
+                        parse_term(&args.to_string()).map(VoiceDictionaryOperation::Create)
+                    }
+                    Tool::VoiceDictionaryUpdate => match (
+                        args.get("id").and_then(Value::as_i64),
+                        parse_term(&args.to_string()),
+                    ) {
+                        (Some(id), Ok(term)) => Ok(VoiceDictionaryOperation::Update { id, term }),
+                        _ => Err("invalid voice dictionary term".to_string()),
+                    },
+                    Tool::VoiceDictionaryDelete => args
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        .map(|id| VoiceDictionaryOperation::Delete { id })
+                        .ok_or_else(|| "invalid voice dictionary term".to_string()),
+                    _ => Err("not a voice dictionary operation".to_string()),
                 };
-                match self.backend.write(tool, &body) {
-                    Ok(Some(row_id)) => format!(r#"{{"accepted":true,"id":{row_id}}}"#),
-                    Ok(None) => r#"{"accepted":true}"#.to_string(),
-                    Err(e) => return error(id, -32000, &e),
+                if !matches!(
+                    tool,
+                    Tool::VoiceDictionaryCreate
+                        | Tool::VoiceDictionaryUpdate
+                        | Tool::VoiceDictionaryDelete
+                ) {
+                    let body = if tool == Tool::MemoryAppendNote {
+                        args.get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string()
+                    } else {
+                        // VisualRecallSetEnabled / VisualRecallDeleteFrame / StateProposeUpdate /
+                        // LessonsSetActive all take the raw JSON args as the body.
+                        args.to_string()
+                    };
+                    match self.backend.write(tool, &body) {
+                        Ok(Some(row_id)) => format!(r#"{{"accepted":true,"id":{row_id}}}"#),
+                        Ok(None) => r#"{"accepted":true}"#.to_string(),
+                        Err(e) => return error(id, -32000, &e),
+                    }
+                } else {
+                    match operation
+                        .and_then(|operation| self.backend.manage_voice_dictionary(operation))
+                    {
+                        Ok(value) => render_voice_dictionary(value),
+                        Err(_) => return error(id, -32602, "invalid voice dictionary request"),
+                    }
                 }
             }
             ApiLevel::PerAction => {
@@ -324,6 +385,10 @@ fn tool_descriptor(tool: Tool) -> Value {
                 "prefs": { "type": "string", "maxLength": 4096 },
             }),
         ),
+        Tool::VoiceDictionaryList => ("List local voice dictionary terms", json!({})),
+        Tool::VoiceDictionaryCreate => ("Create a local voice dictionary term (L1)", json!({ "canonical": { "type": "string" }, "aliases": { "type": "array", "items": { "type": "string" } }, "locale": { "type": "string" }, "scope": { "enum": ["global", "bundle", "surface"] }, "scope_ref": { "type": "string" }, "priority": { "type": "integer" }, "enabled": { "type": "boolean" } })),
+        Tool::VoiceDictionaryUpdate => ("Replace one local voice dictionary term (L1)", json!({ "id": { "type": "integer" }, "canonical": { "type": "string" }, "aliases": { "type": "array", "items": { "type": "string" } }, "locale": { "type": "string" }, "scope": { "enum": ["global", "bundle", "surface"] }, "scope_ref": { "type": "string" }, "priority": { "type": "integer" }, "enabled": { "type": "boolean" } })),
+        Tool::VoiceDictionaryDelete => ("Delete one local voice dictionary term (L1)", json!({ "id": { "type": "integer" } })),
         Tool::DeviceOnboardingGet => ("This device's onboarding / first-run setup state", json!({})),
         Tool::StatePeopleGet
         | Tool::StateProjectsGet
@@ -334,8 +399,15 @@ fn tool_descriptor(tool: Tool) -> Value {
         | Tool::StateCommitmentsList
         | Tool::StateOpenLoopsList => ("List state records", json!({ "include_low": { "type": "boolean" } })),
         Tool::LessonsList => (
-            "List learned lessons (id, kind, scope, instruction, confidence, evidence count, active)",
-            json!({}),
+            "List learned lessons. Omit filters for the Settings/management list. Pass \
+for_generation (and optional app_bundle_id / person_id / project_id) for standing-prompt lookup — \
+person lessons do not apply to unrelated drafts.",
+            json!({
+                "for_generation": { "type": "boolean" },
+                "app_bundle_id": { "type": "string" },
+                "person_id": { "type": "string" },
+                "project_id": { "type": "string" },
+            }),
         ),
         Tool::LessonsSetActive => (
             "Switch a learned lesson on or off (L1)",
@@ -476,6 +548,7 @@ mod tests {
         // Invariant 6: the Learned list and its toggle are on the agent surface too (Plan D-5).
         assert!(tools.iter().any(|t| t["name"] == "lessons.list"));
         assert!(tools.iter().any(|t| t["name"] == "lessons.set_active"));
+        assert!(tools.iter().any(|t| t["name"] == "voice_dictionary.create"));
     }
 
     #[test]
