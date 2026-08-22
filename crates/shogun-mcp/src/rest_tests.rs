@@ -259,6 +259,32 @@ fn voice_dictionary_routes_are_token_and_plan_gated_like_other_local_writes() {
 }
 
 #[test]
+fn meeting_microphone_routes_at_ui_levels() {
+    assert_eq!(
+        route(
+            &req(Method::Get, "/v1/meeting/microphone", Some("t")),
+            &reg(),
+            &ent(),
+        ),
+        Routed::Read {
+            tool: Tool::MeetingMicrophoneGet,
+            id: None,
+        }
+    );
+    assert_eq!(
+        route(
+            &req(Method::Post, "/v1/meeting/microphone", Some("t")),
+            &reg(),
+            &ent(),
+        ),
+        Routed::Write {
+            tool: Tool::MeetingMicrophoneSet,
+            level: Level::L1,
+        }
+    );
+}
+
+#[test]
 fn whoami_endpoint_is_a_token_protected_structured_read() {
     assert_eq!(
         route(

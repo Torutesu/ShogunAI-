@@ -8,13 +8,6 @@ use tauri::Manager;
 use super::overlay::build_overlay;
 use super::state::{apply, emit, finish_audio_stop, now_ms, step, Lane, LANE};
 
-fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_data_dir()
-        .ok()
-        .map(|d| d.join("meeting.json"))
-}
-
 /// Load persisted settings. Called once at setup.
 ///
 /// Any failure — missing file, unreadable file, half-written JSON — leaves the default in
@@ -22,15 +15,10 @@ fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 /// *not* listening.
 pub fn init(app: &tauri::AppHandle) {
     let mut lane = Lane::new();
-    if let Some(p) = settings_path(app) {
-        if let Ok(text) = std::fs::read_to_string(p) {
-            if let Ok(saved) = serde_json::from_str::<Settings>(&text) {
-                lane.settings = saved.clone();
-                if let Ok(mut live) = lane.live_settings.write() {
-                    *live = saved;
-                }
-            }
-        }
+    let saved = shogun_core::meeting::settings_store::load();
+    lane.settings = saved.clone();
+    if let Ok(mut live) = lane.live_settings.write() {
+        *live = saved;
     }
     // An interval left open by a crash, a force-quit or a power cut would otherwise stay
     // `ended_at IS NULL` forever, and `active()` assumes at most one open row. Close it at
@@ -62,14 +50,8 @@ pub fn init(app: &tauri::AppHandle) {
 }
 
 pub(super) fn save(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
-    let Some(p) = settings_path(app) else {
-        return Ok(());
-    };
-    if let Some(dir) = p.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    std::fs::write(&p, json).map_err(|e| format!("save failed: {e}"))
+    let _ = app;
+    shogun_core::meeting::settings_store::save(settings)
 }
 
 /// Apply the machine's effects. The audio handle to stop is returned so callers can join the

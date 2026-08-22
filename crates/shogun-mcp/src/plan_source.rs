@@ -130,6 +130,12 @@ fn app_data_file(env_override: &str, file: &str) -> Option<PathBuf> {
     None
 }
 
+/// Shared desktop meeting settings location. Unlike billing, this preference is not a secret or
+/// entitlement primitive; the debug override exists solely for isolated local tests.
+pub fn meeting_json_path() -> Option<PathBuf> {
+    app_data_file("SHOGUN_MEETING_SETTINGS_JSON", "meeting.json")
+}
+
 /// Where the desktop app's `onboarding.json` lives for this process: the `SHOGUN_ONBOARDING_JSON`
 /// env override, else the macOS app-data path. `None` when neither resolves (e.g. Linux dev with
 /// no override).
