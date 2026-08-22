@@ -484,6 +484,11 @@ pub mod mac {
     fn spawn_claim_poll(app: AppHandle, nonce: String) {
         std::thread::spawn(move || {
             let origin = api_origin();
+            // One row for the whole poll, not one per attempt: the ledger records that this Mac
+            // talked to the licence API, and a row every five seconds would bury the screen it
+            // is meant to inform. Like the rest of the billing lane the request carries no
+            // capture or memory content (§7.7).
+            record_billing_egress(&app, "license_claim");
             let deadline = std::time::Instant::now()
                 + std::time::Duration::from_secs(CLAIM_POLL_DEADLINE_SECS);
 
