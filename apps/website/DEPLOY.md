@@ -91,9 +91,27 @@ Set these per-environment (dashboard → Settings → Variables, or `wrangler se
 
 | Name | Where | Value |
 | --- | --- | --- |
-| `DATABASE_URL` | prod + preview | Supabase **session pooler** connection string (port `5432`, not `6543` — see below). Required for waitlist signup and all billing routes. |
-| `NEXT_PUBLIC_APP_ORIGIN` | prod | e.g. `https://shogunai.com` |
+| `DATABASE_URL` | prod + preview | Supabase **session pooler** connection string (port `5432`, not `6543` — see below). Required for waitlist signup and all billing routes. Still needed with Hyperdrive: it is the fallback, and what migrations run against. |
+| `APP_ORIGIN` | prod | e.g. `https://shogunaios.com`. Read at runtime — `NEXT_PUBLIC_APP_ORIGIN` is inlined at build time and the deploy does not set it. |
 | `LOGO_DEV_TOKEN` | prod + preview | Logo.dev token. Kept server-side by `/api/brand-logo/*`; never use a `NEXT_PUBLIC_*` variable. |
+| `STRIPE_SECRET_KEY` | prod | Live or test — **must match the mode of the Price IDs below.** A mismatch answers `{"reason":"price_mode_mismatch"}` on checkout. |
+| `STRIPE_PRICE_{STANDARD,PRO}_{ANNUAL,MONTHLY}` | prod | All four, or `billingReady()` closes billing entirely. |
+| `STRIPE_WEBHOOK_SECRET` | prod | From the endpoint's **Signing secret**. Rolling it needs the new value here within the overlap window you chose. |
+| `LICENSE_SIGNING_KEY` | prod | base64 of the PKCS#8 PEM from `scripts/gen-license-keypair.mjs`. Without it `/api/license/verify` answers `signing_key_not_configured` — purchases still complete, but no installed Mac can verify. |
+
+**Adding a secret in the dashboard is not enough on its own.** A newly added secret did not
+reach `process.env` in the running Worker until the next `wrangler deploy`, while every secret
+that predated that deploy kept working — so the symptom is one variable reading as unset while
+its neighbours in the same list are fine. Re-run the deploy workflow after adding one, or set it
+with `wrangler secret put`, which uploads a version itself:
+
+```bash
+npx wrangler secret put LICENSE_SIGNING_KEY --name shogunai-website-codex-preview
+```
+
+A deploy does **not** clear secrets — wrangler preserves them. Plain-text `vars` are a different
+matter: `wrangler.jsonc` replaces those on every deploy, so anything set as **Text** in the
+dashboard is lost at the next push. Use **Secret** for anything that must survive.
 
 ## Database from Workers (Supabase)
 
