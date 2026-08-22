@@ -38,6 +38,8 @@
   --shell-sy: 0.089;
   /* Hardware cutout (dead) + visible content drop below silicon (boring.notch). */
   --notch-dead-h: 32px;
+  /* Compact voice/quiet pill. External displays override this to their menu-bar height. */
+  --compact-pill-h: var(--notch-dead-h);
   /* Visible drop below silicon — match pre-weld 44px Idle presence (sync H_CHIN_ROW / IDLE_CONTENT_DROP). */
   --chin-row-h: 44px;
   --chin-h: calc(var(--notch-dead-h) + var(--chin-row-h));

@@ -7,9 +7,9 @@
   width: 240px;
   min-width: 240px;
   max-width: 240px;
-  height: var(--notch-dead-h);
-  min-height: var(--notch-dead-h);
-  max-height: var(--notch-dead-h);
+  height: var(--compact-pill-h);
+  min-height: var(--compact-pill-h);
+  max-height: var(--compact-pill-h);
   margin: 0;
   padding: 0 14px 0 0;
   background: #000;
@@ -125,4 +125,3 @@
   background: var(--fill-strong);
   font-weight: 600;
 }
-

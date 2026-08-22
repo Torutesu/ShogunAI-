@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { panelSizeForView } from "./App";
+import { compactCssMetrics, panelSizeForView } from "./App";
 
 describe("panel view sizing", () => {
   const resizedMain = { w: 742, h: 518 };
@@ -13,5 +13,21 @@ describe("panel view sizing", () => {
 
   it("keeps Overview as the only separately sized workspace", () => {
     expect(panelSizeForView("hub", resizedMain, overview)).toEqual(overview);
+  });
+
+  it("fits an external-display pseudo-notch inside the menu bar", () => {
+    expect(compactCssMetrics({ is_notch: false, notch_height: 24, handle_height: 24 })).toEqual({
+      deadHeight: 0,
+      rowHeight: 24,
+      pillHeight: 24,
+    });
+  });
+
+  it("keeps hardware-notch content below the cutout", () => {
+    expect(compactCssMetrics({ is_notch: true, notch_height: 38, handle_height: 82 })).toEqual({
+      deadHeight: 38,
+      rowHeight: 44,
+      pillHeight: 38,
+    });
   });
 });

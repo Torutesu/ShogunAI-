@@ -36,17 +36,19 @@ import { SAMPLE_VIEW } from "./fullui/sample";
 import type { FullUiView } from "./fullui/types";
 import {
   formatStorageBytes,
+  compactCssMetrics,
   panelSizeForView,
   type Appearance,
   type Citation,
   type Msg,
   type OpenPanelView,
+  type PanelDisplayGeometry,
   type Size,
   type VoiceView,
 } from "./appShell";
 
-export { formatStorageBytes, panelSizeForView } from "./appShell";
-export type { Size, OpenPanelView, VoiceView } from "./appShell";
+export { compactCssMetrics, formatStorageBytes, panelSizeForView } from "./appShell";
+export type { PanelDisplayGeometry, Size, OpenPanelView, VoiceView } from "./appShell";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -334,13 +336,19 @@ function isSelfFocus(id: string): boolean {
 ///   the corner grip both use this — width changes ±dx/2 per side.
 /// - `left`: legacy top-left pin (grow down/right only). Kept for the Rust command; unused by grip.
 type Anchor = "center" | "left";
+type CompactKind = "handle" | "pill";
 
-async function applyPanelSize(w: number, h: number, anchor: Anchor = "center"): Promise<void> {
+async function applyPanelSize(
+  w: number,
+  h: number,
+  anchor: Anchor = "center",
+  compact?: CompactKind,
+): Promise<void> {
   if (!IN_TAURI) return;
   try {
     // Resize the NATIVE panel (top edge anchored). Falls back to the tao window when the native
     // panel isn't in play (plain-window mode).
-    await invoke("set_panel_size", { width: w, height: h, anchor });
+    await invoke("set_panel_size", { width: w, height: h, anchor, compact });
   } catch {
     try {
       await getCurrentWindow().setSize(new LogicalSize(w, h));
@@ -434,6 +442,18 @@ export function App(): JSX.Element {
   /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
   /// finishes inside the notch — only meetings and Visual Recall get their own surfaces.
   const [showHub, setShowHub] = useState(false);
+  const [panelGeometry, setPanelGeometry] = useState<PanelDisplayGeometry>({
+    is_notch: true,
+    notch_height: H_DEAD,
+    handle_height: H_HANDLE,
+  });
+  const compactMetrics = compactCssMetrics(panelGeometry);
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--notch-dead-h", `${compactMetrics.deadHeight}px`);
+    root.style.setProperty("--chin-row-h", `${compactMetrics.rowHeight}px`);
+    root.style.setProperty("--compact-pill-h", `${compactMetrics.pillHeight}px`);
+  }, [compactMetrics.deadHeight, compactMetrics.pillHeight, compactMetrics.rowHeight]);
   const [voice, setVoice] = useState<VoiceView>({
     phase: "idle",
     transcript: "",
@@ -474,7 +494,7 @@ export function App(): JSX.Element {
       const isHub = opts?.hub ?? showHub;
       // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
       // pill's real bounds so the transparent remainder never eats clicks.
-      if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
+      if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE, "center", "handle");
       else {
         const view: OpenPanelView = isSettings ? "settings" : isHub ? "hub" : "chat";
         const size = panelSizeForView(view, chatSize, hubSize);
@@ -561,6 +581,17 @@ export function App(): JSX.Element {
     sizeForViewRef.current({ open: true });
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
+    offs.push(
+      listen<PanelDisplayGeometry>("panel_display_geometry", (e) => {
+        setPanelGeometry((current) =>
+          current.is_notch === e.payload.is_notch
+            && current.notch_height === e.payload.notch_height
+            && current.handle_height === e.payload.handle_height
+            ? current
+            : e.payload,
+        );
+      }),
+    );
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
     // The pill is push-driven: Rust owns the lifecycle, the webview never decides that a meeting
     // has started (FR-MT-07). The first read covers a webview reload mid-meeting.
@@ -668,7 +699,7 @@ export function App(): JSX.Element {
             setExpanding(false);
             setCollapsing(false);
             setNotchSm("idle");
-            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD, "center", "pill");
           } else if (p === "processing") {
             if (collapseTimer.current != null) {
               window.clearTimeout(collapseTimer.current);
@@ -683,7 +714,7 @@ export function App(): JSX.Element {
             setExpanding(false);
             setCollapsing(false);
             setNotchSm("idle");
-            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD, "center", "pill");
           } else if (p === "idle") {
             // Dictation done — always collapse; do not leave recording chrome stuck open.
             beginCollapseRef.current();
@@ -993,10 +1024,10 @@ export function App(): JSX.Element {
       ?? pillRef.current?.getBoundingClientRect().width
       ?? W_HANDLE_FALLBACK;
     const sx = Math.min(1, Math.max(0.22, chinW / Math.max(1, w)));
-    const sy = Math.min(1, Math.max(0.06, H_HANDLE / Math.max(1, h)));
+    const sy = Math.min(1, Math.max(0.06, panelGeometry.handle_height / Math.max(1, h)));
     el.style.setProperty("--shell-sx", sx.toFixed(4));
     el.style.setProperty("--shell-sy", sy.toFixed(4));
-  }, []);
+  }, [panelGeometry.handle_height]);
 
   const beginCollapse = useCallback((): void => {
     if (collapseTimer.current != null) return;
@@ -1366,8 +1397,8 @@ export function App(): JSX.Element {
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
     // Cap Idle at notch width — never grow into empty menu-bar left/right of the cutout.
-    // Hiding Idle uses the same weld (W_HIDE × H_DEAD).
-    // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
+    // Hiding/voice uses the display's compact pill height. Content handles use the hardware
+    // notch + row on built-in displays, but only the menu-bar band on external displays.
     const hiding = el.classList.contains("handle--hiding");
     const voiceActivity = el.querySelector(".vpill") !== null;
     // An offer pill's title + three buttons don't fit the notch cutout — a fixed wider window,
@@ -1383,10 +1414,13 @@ export function App(): JSX.Element {
         : hiding
           ? W_HIDE
           : W_HANDLE_FALLBACK;
-    const minH = voiceActivity || hiding ? H_DEAD : H_HANDLE;
+    const compactKind: CompactKind = voiceActivity || hiding ? "pill" : "handle";
+    const minH = compactKind === "pill" ? compactMetrics.pillHeight : panelGeometry.handle_height;
     void applyPanelSize(
       notchW,
       Math.max(minH, Math.ceil(r.height)),
+      "center",
+      compactKind,
     );
   }, [
     open,
@@ -1403,6 +1437,8 @@ export function App(): JSX.Element {
     connectOffer?.service,
     voice?.phase,
     voice?.level,
+    compactMetrics.pillHeight,
+    panelGeometry.handle_height,
     // The greeting swaps the handle's text (issue #10), so its width changes with it.
     summary?.due,
   ]);

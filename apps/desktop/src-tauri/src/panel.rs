@@ -48,6 +48,61 @@ const VISUAL_RECALL_MIN_H: f64 = 400.0;
 /// Open notch panel resize ceiling — must match `PANEL_MAX_SCREEN_FRAC` in App.tsx.
 const PANEL_MAX_SCREEN_FRAC: f64 = 0.75;
 
+fn resolved_compact_height(
+    compact: Option<&str>,
+    notch_height: f64,
+    is_notch: bool,
+    requested_height: f64,
+) -> f64 {
+    match compact {
+        Some("handle") => shogun_core::notch::geometry::idle_height(notch_height, is_notch),
+        Some("pill") => notch_height,
+        _ => requested_height,
+    }
+}
+
+#[cfg(test)]
+mod compact_height_tests {
+    use super::resolved_compact_height;
+
+    #[test]
+    fn pseudo_notch_compact_surfaces_match_menu_bar_height() {
+        assert_eq!(
+            resolved_compact_height(Some("handle"), 24.0, false, 76.0),
+            24.0
+        );
+        assert_eq!(
+            resolved_compact_height(Some("pill"), 24.0, false, 32.0),
+            24.0
+        );
+    }
+
+    #[test]
+    fn hardware_notch_keeps_content_drop_only_on_handle() {
+        assert_eq!(
+            resolved_compact_height(Some("handle"), 38.0, true, 76.0),
+            82.0
+        );
+        assert_eq!(
+            resolved_compact_height(Some("pill"), 38.0, true, 32.0),
+            38.0
+        );
+    }
+
+    #[test]
+    fn expanded_panel_keeps_requested_height() {
+        assert_eq!(resolved_compact_height(None, 24.0, false, 360.0), 360.0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, serde::Serialize)]
+struct PanelDisplayGeometry {
+    is_notch: bool,
+    notch_height: f64,
+    handle_height: f64,
+}
+
 /// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
 /// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
 /// hidden until summoned again.
@@ -1069,6 +1124,7 @@ pub(crate) fn set_panel_size(
     width: f64,
     height: f64,
     anchor: Option<String>,
+    compact: Option<String>,
 ) {
     use tauri::Manager;
     let keep_left = anchor.as_deref() == Some("left");
@@ -1078,6 +1134,7 @@ pub(crate) fn set_panel_size(
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
         use objc2_foundation::{NSPoint, NSRect, NSSize};
+        use tauri::Emitter;
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
@@ -1090,6 +1147,36 @@ pub(crate) fn set_panel_size(
                 let max_h = (f.size.height * PANEL_MAX_SCREEN_FRAC).floor();
                 width = width.min(max_w);
                 height = height.min(max_h);
+
+                // Use the same per-display geometry as hover hit-testing. A display without
+                // hardware notch gets a pseudo-notch exactly as tall as its menu bar; it must not
+                // inherit the real-notch-only 44pt content drop from the webview.
+                if compact.is_some() {
+                    if let Some(mtm) = objc2::MainThreadMarker::new() {
+                        let geometry = crate::geometry::mac::read_all(mtm).into_iter().find(|g| {
+                            (g.screen.x - f.origin.x).abs() < 0.5
+                                && (g.screen.y - f.origin.y).abs() < 0.5
+                                && (g.screen.w - f.size.width).abs() < 0.5
+                                && (g.screen.h - f.size.height).abs() < 0.5
+                        });
+                        if let Some(g) = geometry {
+                            height = resolved_compact_height(
+                                compact.as_deref(),
+                                g.notch_h,
+                                g.is_notch,
+                                height,
+                            );
+                            let _ = h.emit(
+                                "panel_display_geometry",
+                                PanelDisplayGeometry {
+                                    is_notch: g.is_notch,
+                                    notch_height: g.notch_h,
+                                    handle_height: g.idle.h,
+                                },
+                            );
+                        }
+                    }
+                }
             }
             let f: NSRect = msg_send![ptr, frame];
             let pos = current_castle();
