@@ -1,7 +1,7 @@
 'use client';
 
 import { ArrowLeft, ArrowRight, Check, X } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type CaseScene = { title: string; before: string; lost: string; after: string };
 
@@ -11,29 +11,163 @@ export type CaseLabels = {
   lost: string;
   seeAfter: string;
   seeBefore: string;
+  region: string;
+  prev: string;
+  next: string;
 };
 
+const CARD_WIDTH = 'w-[min(900px,86vw)]';
+
 /**
- * One scene per card, shown a side at a time: today, then the same day with the
- * memory in place. The panels sit in the same grid cell so the card keeps the
- * height of the taller side and nothing jumps when it slides.
+ * The scenes read as a track you move through rather than a stack you scroll
+ * past: one card at a time, the neighbours peeking at either edge so it is
+ * visible there is more than the one in front of you. Each card still shows a
+ * side at a time — today, then the same day with the memory in place.
  */
 export function CaseCards({ cases, labels }: { cases: readonly CaseScene[]; labels: CaseLabels }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(0);
+
+  const scrollToIndex = useCallback((index: number) => {
+    const track = trackRef.current;
+    const card = track?.children[index] as HTMLElement | undefined;
+    if (!track || !card) return;
+    track.scrollTo({ left: card.offsetLeft - (track.clientWidth - card.clientWidth) / 2 });
+  }, []);
+
+  // The active card follows the scroll position, not the buttons: a swipe, a
+  // trackpad flick and a dot all have to leave the same indicator behind.
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+
+    let frame = 0;
+    const sync = () => {
+      frame = 0;
+      const center = track.scrollLeft + track.clientWidth / 2;
+      let nearest = 0;
+      let shortest = Number.POSITIVE_INFINITY;
+      Array.from(track.children).forEach((child, index) => {
+        const card = child as HTMLElement;
+        const distance = Math.abs(card.offsetLeft + card.clientWidth / 2 - center);
+        if (distance < shortest) {
+          shortest = distance;
+          nearest = index;
+        }
+      });
+      setActive(nearest);
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(sync);
+    };
+
+    track.addEventListener('scroll', onScroll, { passive: true });
+    sync();
+    return () => {
+      track.removeEventListener('scroll', onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [cases]);
+
   return (
-    <div className="mx-auto mt-14 grid max-w-[900px] gap-6">
-      {cases.map((scene) => (
-        <CaseCard key={scene.title} scene={scene} labels={labels} />
-      ))}
+    <div className="mt-14">
+      <div
+        ref={trackRef}
+        role="group"
+        aria-label={labels.region}
+        tabIndex={0}
+        className={`relative flex snap-x snap-mandatory gap-6 overflow-x-auto scroll-smooth rounded-[26px] px-[max(0px,calc((100%-min(900px,86vw))/2))] pb-2 [scrollbar-width:none] focus-visible:ring-2 focus-visible:ring-[#6758ff] focus-visible:outline-none motion-reduce:scroll-auto [&::-webkit-scrollbar]:hidden`}
+      >
+        {cases.map((scene, index) => (
+          <CaseCard
+            key={scene.title}
+            scene={scene}
+            labels={labels}
+            index={index}
+            total={cases.length}
+          />
+        ))}
+      </div>
+
+      <div className="mt-8 flex items-center justify-center gap-5">
+        <TrackButton
+          label={labels.prev}
+          disabled={active === 0}
+          onClick={() => scrollToIndex(active - 1)}
+        >
+          <ArrowLeft className="size-4" aria-hidden="true" />
+        </TrackButton>
+
+        <div className="flex items-center gap-2">
+          {cases.map((scene, index) => (
+            <button
+              key={scene.title}
+              type="button"
+              onClick={() => scrollToIndex(index)}
+              aria-label={scene.title}
+              aria-current={index === active}
+              className={`h-2 rounded-full transition-[width,background-color] duration-300 motion-reduce:transition-none ${
+                index === active ? 'bg-ink w-7' : 'bg-border hover:bg-muted w-2'
+              }`}
+            />
+          ))}
+        </div>
+
+        <TrackButton
+          label={labels.next}
+          disabled={active === cases.length - 1}
+          onClick={() => scrollToIndex(active + 1)}
+        >
+          <ArrowRight className="size-4" aria-hidden="true" />
+        </TrackButton>
+      </div>
     </div>
   );
 }
 
-function CaseCard({ scene, labels }: { scene: CaseScene; labels: CaseLabels }) {
+function TrackButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className="border-border bg-surface text-ink hover:border-ink/25 flex size-10 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:border-[color:var(--border)]"
+    >
+      {children}
+    </button>
+  );
+}
+
+function CaseCard({
+  scene,
+  labels,
+  index,
+  total,
+}: {
+  scene: CaseScene;
+  labels: CaseLabels;
+  index: number;
+  total: number;
+}) {
   const [side, setSide] = useState<'before' | 'after'>('before');
   const showingAfter = side === 'after';
 
   return (
-    <article className="theme-light-panel border-border bg-surface overflow-hidden rounded-[26px] border">
+    <article
+      aria-label={`${index + 1} / ${total} — ${scene.title}`}
+      className={`theme-light-panel border-border bg-surface flex shrink-0 snap-center flex-col overflow-hidden rounded-[26px] border ${CARD_WIDTH}`}
+    >
       <header className="border-border flex flex-wrap items-center justify-between gap-4 border-b px-[clamp(22px,3.4vw,40px)] py-6">
         <h3 className="text-ink text-[clamp(19px,1.9vw,25px)] font-semibold tracking-[-0.035em]">{scene.title}</h3>
         <div className="border-border bg-cloud/60 flex shrink-0 rounded-full border p-1" role="group">
@@ -53,7 +187,7 @@ function CaseCard({ scene, labels }: { scene: CaseScene; labels: CaseLabels }) {
         </div>
       </header>
 
-      <div className="grid">
+      <div className="grid flex-1">
         <div
           aria-hidden={showingAfter}
           className={`col-start-1 row-start-1 px-[clamp(22px,3.4vw,40px)] py-[clamp(26px,3.4vw,40px)] transition-[transform,opacity] duration-500 ease-out motion-reduce:transition-none ${
