@@ -145,6 +145,28 @@ dashboard is lost at the next push. Use **Secret** for anything that must surviv
      cached read means a revoked licence keeps verifying until the entry expires. What we want
      from Hyperdrive is the connection, not the cache.
 
+   **Hyperdrive is not a fix for connection reuse.** After the binding was live and reporting
+   zero errors, half of all licence reads still failed — because the client was cached at
+   module scope, and Cloudflare's rule applies to Hyperdrive too:
+
+   > TCP sockets cannot be created in global scope and shared across requests. You should
+   > always create TCP sockets within a handler.
+
+   The first request in an isolate opened the connection and worked; every later request in
+   that isolate inherited a socket owned by a finished request and hung until its deadline.
+   `src/db/index.ts` now keys clients by the per-request Cloudflare context in a `WeakMap`.
+   **Never hoist that client back to module scope**, whatever the transport.
+
+   Two things made this hard to see, both worth remembering:
+
+   - The Hyperdrive dashboard showed 48 queries and **0 errors** while most requests failed.
+     A request that hangs on a dead local socket never reaches Hyperdrive, so a healthy
+     dashboard is not evidence that the database layer is healthy.
+   - The symptom looks random from the outside (~50%, no pattern by key or by route). It is
+     not random: it is a function of whether the isolate serving you is cold. The log line
+     that fires **once per isolate** is what made that visible — lining its presence up
+     against the response status separated the two populations exactly, 20/20 and 20/20.
+
 ## Running migrations
 
 Migrations run against Supabase directly (not from the Worker):
