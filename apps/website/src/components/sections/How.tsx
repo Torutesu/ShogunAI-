@@ -1,7 +1,7 @@
 import { Workflow } from 'lucide-react';
 import { Reveal } from '@/components/animations/Reveal';
 import { BrandIcon } from '@/components/BrandIcon';
-import { Logo } from '@/components/Logo';
+import { AnimatedLogo } from '@/components/AnimatedLogo';
 import type { Dictionary } from '@/i18n/dictionaries';
 import type { Locale } from '@/i18n/config';
 
@@ -82,8 +82,8 @@ function ProvidersVisual({ copy }: { copy: HowCopy }) {
     <div className="flex h-[306px] flex-col overflow-hidden rounded-[26px] bg-[radial-gradient(circle_at_50%_12%,rgba(255,255,255,0.16),transparent_30%),linear-gradient(180deg,#171717_0%,#1b1b1b_100%)] p-4">
       <div className="flex min-h-[58px] items-center justify-between gap-3 rounded-[18px] border border-[#836029] bg-[#362816] px-3.5 py-2.5 text-[#f0d39b] shadow-[0_16px_30px_rgba(0,0,0,0.2)]">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-[11px] bg-[#ead49a]">
-            <Logo size={20} />
+          <span data-mark-hover className="flex size-9 shrink-0 items-center justify-center rounded-[11px] bg-[#ead49a]">
+            <AnimatedLogo size={20} />
           </span>
           <span className="truncate text-[13px] font-semibold sm:text-[14px]">ShogunAI Memory</span>
         </div>

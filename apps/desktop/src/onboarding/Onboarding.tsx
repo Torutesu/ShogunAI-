@@ -17,6 +17,7 @@ import { listen } from "@tauri-apps/api/event";
 import { count, t } from "../strings";
 import { ConnectionsList } from "../connections";
 import { AnalyticsToggle } from "../AnalyticsToggle";
+import { AnimatedLogo } from "../Logo";
 import { comboChips, DEFAULT_BINDS } from "../keys";
 import appIconUrl from "../../src-tauri/icons/icon-128.png";
 import {
@@ -284,6 +285,8 @@ export function Onboarding(): JSX.Element {
 function Welcome(): JSX.Element {
   return (
     <section className="obs">
+      {/* First sight of the product: the mark folds itself out of the sheet before the copy. */}
+      <AnimatedLogo size={68} morphTo="heart" className="ob-welcome-mark" />
       <h1 className="onb-title">{t.obWelcomeTitle}</h1>
       <p className="onb-lead">{t.obWelcomeBody}</p>
       <ul className="ob-points">

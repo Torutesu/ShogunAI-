@@ -1,5 +1,5 @@
 import { ChevronDown, Menu } from 'lucide-react';
-import { Logo } from '@/components/Logo';
+import { AnimatedLogo } from '@/components/AnimatedLogo';
 import { LanguageMenu } from '@/components/LanguageMenu';
 import { SoundInteractions } from '@/components/SoundInteractions';
 import { SoundToggle } from '@/components/SoundToggle';
@@ -41,8 +41,8 @@ export async function Nav({ localeOverride }: { localeOverride?: Locale } = {}) 
   return (
     <header className="sticky top-0 z-50 border-b border-border/70 bg-surface/72 backdrop-blur-2xl backdrop-saturate-150">
       <div className="container-x flex h-16 items-center justify-between gap-2 sm:gap-4">
-        <a href={`${prefix}/#top`} aria-label="ShogunAI home" className="group/brand flex items-center gap-2.5">
-          <Logo size={26} className="brand-logo" />
+        <a href={`${prefix}/#top`} aria-label="ShogunAI home" data-mark-hover className="group/brand flex items-center gap-2.5">
+          <AnimatedLogo size={26} className="brand-logo" />
           <span className="font-display text-lg font-semibold tracking-tight">ShogunAI</span>
         </a>
 

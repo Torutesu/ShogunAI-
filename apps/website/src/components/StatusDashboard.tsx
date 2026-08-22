@@ -2,7 +2,7 @@
 
 import { ArrowRight, Check, Copy, Gift, Loader2, Mail, Star } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { Logo } from '@/components/Logo';
+import { AnimatedLogo } from '@/components/AnimatedLogo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -383,8 +383,8 @@ function EnvelopeHero() {
           <path d="M0 60 L210 156 L420 60 L420 230 Q420 250 400 250 L20 250 Q0 250 0 230 Z" fill="#0b0e11" />
           <path d="M0 60 L210 156 L420 60" fill="none" stroke="rgba(255,255,255,0.09)" strokeWidth="1.5" />
         </svg>
-        <span className="absolute bottom-4 left-4 z-30 grid size-9 place-items-center rounded-full bg-white/10">
-          <Logo size={17} />
+        <span data-mark-hover className="absolute bottom-4 left-4 z-30 grid size-9 place-items-center rounded-full bg-white/10">
+          <AnimatedLogo size={17} />
         </span>
       </div>
     </div>

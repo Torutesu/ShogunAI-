@@ -1,4 +1,4 @@
-import { Logo } from '@/components/Logo';
+import { AnimatedLogo } from '@/components/AnimatedLogo';
 import { getI18n } from '@/i18n/server';
 import type { Locale } from '@/i18n/config';
 
@@ -44,8 +44,8 @@ export async function Footer({ localeOverride }: { localeOverride?: Locale } = {
     <footer className="border-t border-border pt-14">
       <div className="container-x grid gap-12 pb-10 lg:grid-cols-[minmax(240px,0.9fr)_minmax(0,3.1fr)] xl:gap-16">
         <div>
-          <a href={`${prefix}/#top`} className="flex items-center gap-2.5">
-            <Logo size={22} />
+          <a href={`${prefix}/#top`} data-mark-hover className="flex items-center gap-2.5">
+            <AnimatedLogo size={22} />
             <span className="font-display text-lg font-semibold tracking-tight">ShogunAI</span>
           </a>
           <p className="mt-3.5 text-xs text-muted">{t.footer.tagline}</p>

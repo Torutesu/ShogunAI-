@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Logo } from "../Logo";
+import { AnimatedLogo } from "../Logo";
 import { tf } from "../strings";
 import type {
   ActivityView,
@@ -54,8 +54,8 @@ export function FullUi({ view }: { view: FullUiView }): JSX.Element {
     <div className="full">
       <div className="full__body">
         <nav className="side">
-          <div className="side__brand">
-            <Logo size={24} />
+          <div className="side__brand" data-mark-hover>
+            <AnimatedLogo size={24} morphTo="heart" />
             <span className="side__name">ShogunAI</span>
           </div>
           {view.plan !== "pro" && <span className="side__plan">{planLabel(view.plan)}</span>}
