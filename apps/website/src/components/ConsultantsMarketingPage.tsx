@@ -1050,9 +1050,6 @@ const caseUi: Record<Locale, CaseLabels> = {
     lost: 'What it costs:',
     seeAfter: 'See the same day with ShogunAI',
     seeBefore: 'Back to today',
-    region: 'Before / After cases',
-    prev: 'Previous case',
-    next: 'Next case',
   },
   ja: {
     before: 'Before',
@@ -1060,9 +1057,6 @@ const caseUi: Record<Locale, CaseLabels> = {
     lost: '失われるもの:',
     seeAfter: 'After（ShogunAI のあと）を見る',
     seeBefore: 'Before に戻る',
-    region: 'Before / After の事例',
-    prev: '前の事例',
-    next: '次の事例',
   },
   es: {
     before: 'Before',
@@ -1070,9 +1064,6 @@ const caseUi: Record<Locale, CaseLabels> = {
     lost: 'Lo que cuesta:',
     seeAfter: 'Ver el mismo día con ShogunAI',
     seeBefore: 'Volver a hoy',
-    region: 'Casos Before / After',
-    prev: 'Caso anterior',
-    next: 'Caso siguiente',
   },
   de: {
     before: 'Before',
@@ -1080,9 +1071,6 @@ const caseUi: Record<Locale, CaseLabels> = {
     lost: 'Was es kostet:',
     seeAfter: 'Denselben Tag mit ShogunAI ansehen',
     seeBefore: 'Zurück zu heute',
-    region: 'Before / After — Fälle',
-    prev: 'Vorheriger Fall',
-    next: 'Nächster Fall',
   },
 };
 
