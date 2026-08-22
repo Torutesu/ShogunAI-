@@ -29,7 +29,13 @@
       "hyperdrive": [
         {
           "binding": "HYPERDRIVE",
-          "id": "c8c81f7f1452481497c4690fb9d5db65"
+          "id": "c8c81f7f1452481497c4690fb9d5db65",
+          // Required, and not only for `wrangler dev`: the OpenNext deploy command starts a local
+          // miniflare to read the environment, and a Hyperdrive binding without this fails there
+          // — so omitting it breaks the deploy, not just local development. Never used against
+          // the real database; the deployed Worker resolves the binding from `id` above. Matches
+          // the localhost default in src/db/index.ts, and is not a secret.
+          "localConnectionString": "postgres://postgres:postgres@localhost:5432/shogun_waitlist"
         }
       ],
       "d1_databases": [
