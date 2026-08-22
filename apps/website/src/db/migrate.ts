@@ -163,6 +163,9 @@ async function main() {
   //
   // `ENABLE`, never `FORCE`: FORCE would subject the table owner to RLS too, and the app connects
   // as a role that is very likely the owner. That would lock out the application itself.
+  //
+  // Rollback = `ALTER TABLE <t> DISABLE ROW LEVEL SECURITY;` per table. Nothing depends on RLS
+  // being on, so disabling it restores the previous behaviour exactly.
   for (const table of [
     'participants',
     'rate_limits',
