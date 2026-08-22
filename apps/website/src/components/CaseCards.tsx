@@ -1,7 +1,7 @@
 'use client';
 
-import { ArrowLeft, ArrowRight, Check, X } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowRight, CalendarDays, Check, FileText, ListTodo, Mail, MessageSquare, X } from 'lucide-react';
+import { Reveal } from '@/components/animations/Reveal';
 
 export type CaseScene = { title: string; before: string; lost: string; after: string };
 
@@ -9,98 +9,102 @@ export type CaseLabels = {
   before: string;
   after: string;
   lost: string;
-  seeAfter: string;
-  seeBefore: string;
 };
 
+/** Generic enough for every persona: a day's traffic, whatever the work is. */
+const FRAGMENT_ICONS = [MessageSquare, FileText, CalendarDays, ListTodo, Mail] as const;
+
 /**
- * One scene per card, shown a side at a time: today, then the same day with the
- * memory in place. The panels sit in the same grid cell so the card keeps the
- * height of the taller side and nothing jumps when it slides.
+ * One scene per card, both sides on the face of it: what the day costs today,
+ * then the same day with the memory in place. Nothing is behind a control —
+ * the point of the section is the comparison, so hiding half of it behind a
+ * toggle put the answer one click away from the question.
+ *
+ * The cards rise in as they reach the viewport, staggered across the row.
  */
 export function CaseCards({ cases, labels }: { cases: readonly CaseScene[]; labels: CaseLabels }) {
   return (
-    <div className="mx-auto mt-14 grid max-w-[900px] gap-6">
-      {cases.map((scene) => (
-        <CaseCard key={scene.title} scene={scene} labels={labels} />
+    <div className="mt-14 grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+      {cases.map((scene, index) => (
+        <Reveal key={scene.title} className="h-full" delay={index * 0.08} y={26}>
+          <CaseCard scene={scene} labels={labels} index={index} />
+        </Reveal>
       ))}
     </div>
   );
 }
 
-function CaseCard({ scene, labels }: { scene: CaseScene; labels: CaseLabels }) {
-  const [side, setSide] = useState<'before' | 'after'>('before');
-  const showingAfter = side === 'after';
-
+function CaseCard({ scene, labels, index }: { scene: CaseScene; labels: CaseLabels; index: number }) {
   return (
-    <article className="theme-light-panel border-border bg-surface overflow-hidden rounded-[26px] border">
-      <header className="border-border flex flex-wrap items-center justify-between gap-4 border-b px-[clamp(22px,3.4vw,40px)] py-6">
-        <h3 className="text-ink text-[clamp(19px,1.9vw,25px)] font-semibold tracking-[-0.035em]">{scene.title}</h3>
-        <div className="border-border bg-cloud/60 flex shrink-0 rounded-full border p-1" role="group">
-          {(['before', 'after'] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setSide(value)}
-              aria-pressed={side === value}
-              className={`rounded-full px-4 py-1.5 text-[12px] font-semibold transition-colors ${
-                side === value ? 'bg-ink text-bg' : 'text-muted hover:text-ink'
-              }`}
-            >
-              {value === 'before' ? labels.before : labels.after}
-            </button>
-          ))}
-        </div>
-      </header>
+    <article className="theme-light-panel border-border bg-surface flex h-full flex-col overflow-hidden rounded-[26px] border p-4">
+      <SceneDiagram index={index} />
 
-      <div className="grid">
-        <div
-          aria-hidden={showingAfter}
-          className={`col-start-1 row-start-1 px-[clamp(22px,3.4vw,40px)] py-[clamp(26px,3.4vw,40px)] transition-[transform,opacity] duration-500 ease-out motion-reduce:transition-none ${
-            showingAfter ? 'pointer-events-none -translate-x-6 opacity-0' : 'translate-x-0 opacity-100'
-          }`}
-        >
-          <p className="text-muted flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
-            <X className="size-4 text-[#ef4d48]" strokeWidth={2.6} aria-hidden="true" />
-            {labels.before}
-          </p>
-          <p className="text-muted mt-5 text-[clamp(15px,1.2vw,17px)] leading-[1.7]">{scene.before}</p>
-          <p className="border-border text-muted mt-6 border-t pt-5 text-[14px] leading-[1.6]">
-            <span className="font-semibold text-[#ef4d48]">{labels.lost}</span> {scene.lost}
-          </p>
-          <button
-            type="button"
-            onClick={() => setSide('after')}
-            tabIndex={showingAfter ? -1 : 0}
-            className="text-ink mt-7 inline-flex items-center gap-2 text-sm font-semibold underline decoration-[#6758ff]/40 underline-offset-4 hover:decoration-[#6758ff]"
-          >
-            {labels.seeAfter}
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </button>
-        </div>
+      <div className="flex flex-1 flex-col px-2 pt-6 pb-2">
+        <h3 className="text-ink text-[clamp(18px,1.4vw,21px)] leading-[1.35] font-semibold tracking-[-0.03em]">
+          {scene.title}
+        </h3>
 
-        <div
-          aria-hidden={!showingAfter}
-          className={`theme-soft-section col-start-1 row-start-1 bg-[#f7f4ff] px-[clamp(22px,3.4vw,40px)] py-[clamp(26px,3.4vw,40px)] transition-[transform,opacity] duration-500 ease-out motion-reduce:transition-none ${
-            showingAfter ? 'translate-x-0 opacity-100' : 'pointer-events-none translate-x-6 opacity-0'
-          }`}
-        >
-          <p className="text-ink flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
-            <Check className="size-4 text-[#25a65a]" strokeWidth={2.8} aria-hidden="true" />
-            {labels.after}
-          </p>
-          <p className="text-ink mt-5 text-[clamp(15px,1.2vw,17px)] leading-[1.7] font-medium">{scene.after}</p>
-          <button
-            type="button"
-            onClick={() => setSide('before')}
-            tabIndex={showingAfter ? 0 : -1}
-            className="text-muted hover:text-ink mt-7 inline-flex items-center gap-2 text-sm font-semibold"
-          >
-            <ArrowLeft className="size-4" aria-hidden="true" />
-            {labels.seeBefore}
-          </button>
+        <p className="text-muted mt-5 flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
+          <X className="size-4 text-[#ef4d48]" strokeWidth={2.6} aria-hidden="true" />
+          {labels.before}
+        </p>
+        <p className="text-muted mt-3 text-[14px] leading-[1.75]">{scene.before}</p>
+        <p className="border-border text-muted mt-5 border-t pt-4 text-[13px] leading-[1.6]">
+          <span className="font-semibold text-[#ef4d48]">{labels.lost}</span> {scene.lost}
+        </p>
+
+        <div className="mt-auto pt-6">
+          <div className="theme-soft-section rounded-[18px] bg-[#f7f4ff] p-4">
+            <p className="text-ink flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase">
+              <Check className="size-4 text-[#25a65a]" strokeWidth={2.8} aria-hidden="true" />
+              {labels.after}
+            </p>
+            <p className="text-ink mt-3 text-[14px] leading-[1.75] font-medium">{scene.after}</p>
+          </div>
         </div>
       </div>
     </article>
+  );
+}
+
+/**
+ * The same figure on every card — scattered fragments on the left, one settled
+ * record on the right — with only the icons rotating by index, so five cards in
+ * a row do not read as five copies of one picture. Decorative: the card's text
+ * carries the meaning, so it is hidden from assistive tech.
+ */
+function SceneDiagram({ index }: { index: number }) {
+  const fragments = [0, 1, 2].map((offset) => FRAGMENT_ICONS[(index + offset) % FRAGMENT_ICONS.length]);
+  const offsets = [7, -5, 4];
+  const widths = [26, 34, 20];
+
+  return (
+    <div
+      aria-hidden="true"
+      className="bg-cloud border-border flex h-[132px] items-center justify-center gap-4 overflow-hidden rounded-[20px] border px-5"
+    >
+      <div className="flex flex-col gap-2">
+        {fragments.map((Icon, i) => (
+          <span
+            key={i}
+            style={{ transform: `translateX(${offsets[i]}px)`, opacity: 1 - i * 0.14 }}
+            className="border-border bg-surface flex items-center gap-2 rounded-[10px] border px-2.5 py-1.5 shadow-[0_2px_6px_rgba(11,18,32,0.05)]"
+          >
+            <Icon className="text-faint size-3.5" strokeWidth={2} />
+            <span className="bg-border block h-1 rounded-full" style={{ width: widths[i] }} />
+          </span>
+        ))}
+      </div>
+
+      <ArrowRight className="size-4 shrink-0 text-[#6758ff]" strokeWidth={2.4} />
+
+      <div className="flex items-center gap-2.5 rounded-[12px] border border-[#6758ff]/25 bg-[#f7f4ff] px-3 py-2.5 shadow-[0_6px_16px_rgba(103,88,255,0.12)]">
+        <Check className="size-4 shrink-0 text-[#25a65a]" strokeWidth={2.8} />
+        <span className="flex flex-col gap-1.5">
+          <span className="block h-1 w-14 rounded-full bg-[#6758ff]/35" />
+          <span className="block h-1 w-9 rounded-full bg-[#6758ff]/20" />
+        </span>
+      </div>
+    </div>
   );
 }
