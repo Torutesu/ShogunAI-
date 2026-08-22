@@ -1,4 +1,4 @@
-import { HttpError, fail, ok, readJsonObject } from '@/lib/http';
+import { HttpError, fail, ok, readCappedBody, readJsonObject } from '@/lib/http';
 import { isValidEmail } from '@/lib/referral';
 import { addParticipant } from '@/lib/service';
 import { clientIp, hashIp, isAuthorizedOrigin, isHoneypotTripped } from '@/lib/waitlist-auth';
@@ -9,7 +9,16 @@ export const runtime = 'nodejs';
 async function readSignupBody(req: Request): Promise<Record<string, unknown>> {
   const contentType = req.headers.get('content-type') ?? '';
   if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
-    const form = await req.formData();
+    // `req.formData()` buffers the whole body with no ceiling of its own, so the no-JS form
+    // fallback used to sidestep the 8 KB cap the JSON path enforces: a multi-MB multipart POST
+    // cleared the origin and rate-limit checks and then materialised in full inside the isolate.
+    // Read through the shared capped reader first, then re-present those (≤ 8 KB) bytes to the
+    // platform parser — same cap, same 413, and multipart still parses because the original
+    // Content-Type (boundary included) rides along.
+    const bytes = await readCappedBody(req);
+    // Copy into a plain Uint8Array: BodyInit rejects Node's Buffer<ArrayBufferLike>
+    // under TS 5.7's generic typed arrays, and the body is capped at 8 KB anyway.
+    const form = await new Response(new Uint8Array(bytes), { headers: { 'content-type': contentType } }).formData();
     return {
       email: form.get('email'),
       company_url: form.get('company_url'),

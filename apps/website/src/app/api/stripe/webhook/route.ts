@@ -46,10 +46,27 @@ const HANDLED = new Set([
   'invoice.payment_failed',
 ]);
 
-/** Mirror one subscription (by id, freshly read) into our tables. */
-async function syncSubscription(subId: string): Promise<void> {
-  const sub = await stripe().subscriptions.retrieve(subId);
-  await upsertSubscription(toSubscriptionRecord(sub as unknown as StripeSubscriptionLike));
+/**
+ * Mirror one subscription (by id, freshly read) into our tables.
+ *
+ * Always the state Stripe reports *now*, never the snapshot an event happens to carry — that
+ * re-read is the whole mechanism behind the order-independence contract above.
+ *
+ * `terminalFallback` is passed only by `customer.subscription.deleted`, whose payload is terminal
+ * by construction. If Stripe cannot serve the subscription at all, applying that payload still
+ * leaves the row cancelled; throwing instead would 500 on every retry and pin a stale `active`
+ * row in place for the whole retry window — the one outcome this route exists to prevent.
+ */
+async function syncSubscription(subId: string, terminalFallback?: StripeSubscriptionLike): Promise<void> {
+  let sub: StripeSubscriptionLike;
+  try {
+    sub = (await stripe().subscriptions.retrieve(subId)) as unknown as StripeSubscriptionLike;
+  } catch (e) {
+    if (!terminalFallback) throw e;
+    console.error('webhook: subscription re-read failed, applying terminal payload:', subId, e);
+    sub = terminalFallback;
+  }
+  await upsertSubscription(toSubscriptionRecord(sub));
 }
 
 async function onCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
@@ -127,13 +144,19 @@ export async function POST(req: Request) {
 
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
-      case 'customer.subscription.deleted':
-        // The event payload is already the full subscription; use it directly (one less API call)
-        // — `deleted` in particular carries the terminal status we must persist.
-        await upsertSubscription(
-          toSubscriptionRecord(event.data.object as unknown as StripeSubscriptionLike),
+      case 'customer.subscription.deleted': {
+        // Re-read rather than apply the event's own snapshot. Stripe redelivers, and a stale
+        // `updated` (status: active) landing after `deleted` would otherwise resurrect a
+        // cancelled subscription — /api/license/verify would go on minting tokens for someone
+        // who stopped paying. A cancelled subscription stays retrievable and comes back with
+        // status `canceled`, so `deleted` still persists the terminal state.
+        const snapshot = event.data.object as unknown as StripeSubscriptionLike;
+        await syncSubscription(
+          snapshot.id,
+          event.type === 'customer.subscription.deleted' ? snapshot : undefined,
         );
         break;
+      }
 
       case 'invoice.payment_succeeded':
       case 'invoice.payment_failed': {

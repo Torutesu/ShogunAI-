@@ -298,7 +298,9 @@ html[data-theme='dark'] .hero-subtitle {
   color: #b8c5dc !important;
 }
 
-html[data-theme='dark'] .hero-participants > span {
+/* Dims the plain proof text beside the avatar stack. The participant pill is a
+ * direct child too, but it carries its own lighter tone below — keep it out. */
+html[data-theme='dark'] .hero-participants > span:not(.hero-participant-count) {
   color: #aebbd1 !important;
 }
 

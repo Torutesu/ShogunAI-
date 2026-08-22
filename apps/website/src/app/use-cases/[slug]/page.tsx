@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { MarketingContentPage } from '@/components/MarketingContentPage';
-import { getI18n } from '@/i18n/server';
+import { getDictionary } from '@/i18n/dictionaries';
 import { findMarketingPage, getUseCasePages } from '@/lib/marketing-content';
 import { localizedAlternates } from '@/lib/site';
 
@@ -18,6 +18,9 @@ export default async function UseCaseDetailPage({ params }: { params: Promise<{ 
   const { slug } = await params;
   const page = findMarketingPage(getUseCasePages('en'), slug);
   if (!page) notFound();
-  const { t } = await getI18n();
+  // This route is the un-prefixed English variant; the localized copy lives under
+  // /[locale]/use-cases/[slug]. Pin the dictionary to `en` so the shell, the body,
+  // and the CTA never disagree because of the visitor's locale cookie.
+  const t = getDictionary('en');
   return <MarketingContentPage page={page} section="use-cases" sectionLabel="Use cases" t={t} locale="en" />;
 }
