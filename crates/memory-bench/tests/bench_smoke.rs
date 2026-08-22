@@ -293,6 +293,40 @@ fn a_report_can_be_written_and_read_back() {
 }
 
 #[test]
+fn repeated_report_persistence_never_overwrites_the_first_artifact() {
+    let cfg = BenchConfig {
+        events: 300,
+        queries: 20,
+        ..BenchConfig::smoke()
+    };
+    let report = memory_bench::run(&cfg).expect("run");
+    let dir = std::env::temp_dir().join(format!(
+        "memory-bench-no-overwrite-test-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let first = memory_bench::runner::persist(&report, &dir.to_string_lossy()).expect("first");
+    let first_bytes = std::fs::read(&first).expect("read first");
+    let second = memory_bench::runner::persist(&report, &dir.to_string_lossy()).expect("second");
+
+    assert_ne!(first, second, "repeated runs need distinct artifact paths");
+    assert_eq!(
+        std::fs::read(&first).expect("read first again"),
+        first_bytes,
+        "saving a second run must not change the first artifact"
+    );
+    assert!(
+        second
+            .file_stem()
+            .is_some_and(|name| name.to_string_lossy().ends_with("-run2")),
+        "second artifact should have a readable collision suffix: {second:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn an_unknown_workload_is_an_error_not_a_default() {
     let cfg = BenchConfig {
         workload: "nope".to_string(),

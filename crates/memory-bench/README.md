@@ -113,12 +113,15 @@ idle window.
 
 Every rate is nullable. A metric a workload cannot express reports `null`, never `0`. Reports also
 carry `validity.valid` plus machine-readable disqualification reasons. Wrong merges, write failures,
-or query failures make the whole run invalid for automated comparison.
+query failures, missing or dirty Git provenance, and undersized query sets make the whole run
+invalid for automated comparison. At least 20 query samples are required for a p95 SLO verdict;
+smaller smoke runs still complete, but publish no pass/fail claim.
 
 ## Reproducibility
 
-A result is defined by `(workload, seed, events, queries)` plus the commit and the build profile.
-All of it is written into the report:
+A result is defined by all runtime knobs (`workload`, `seed`, `events`, `queries`, `k`, `warmup`,
+and `write_batch`) plus storage/retrieval mode, commit, and build profile. All of it is written into
+the report:
 
 ```json
 {
@@ -133,6 +136,9 @@ All of it is written into the report:
 recording it as a baseline for that SHA would be wrong. `db_path` and `out_dir` are recorded as
 final path components only — where the scratch directory lived on one contributor's disk is
 machine metadata, not part of what defines the result, and committed baselines are public.
+
+Report filenames include every runtime knob and storage/retrieval mode. Repeating an identical run
+creates an atomic `-runN` sibling; persistence never opens an existing artifact for writing.
 
 The seed drives a SplitMix64 defined in `rng.rs` rather than pulled from `rand`, whose generators
 are explicitly allowed to change output between minor versions. A stored baseline has to stay

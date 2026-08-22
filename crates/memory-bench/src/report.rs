@@ -31,7 +31,14 @@ pub struct Environment {
 impl Environment {
     pub fn detect() -> Self {
         let git = |args: &[&str]| -> Option<String> {
-            let out = std::process::Command::new("git").args(args).output().ok()?;
+            // The launch directory may be /tmp, another checkout, or a GUI process directory. The
+            // source tree that Cargo compiled is the only repository whose SHA describes this bin.
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(env!("CARGO_MANIFEST_DIR"))
+                .args(args)
+                .output()
+                .ok()?;
             out.status
                 .success()
                 .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -97,6 +104,10 @@ pub enum Disqualification {
     WrongMerges,
     WriteFailures,
     QueryFailures,
+    UnknownGitCommit,
+    UnknownGitState,
+    DirtyWorkingTree,
+    InsufficientQuerySamples,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -106,7 +117,12 @@ pub struct MeasurementValidity {
 }
 
 impl MeasurementValidity {
-    pub fn assess(writes: &WriteStats, quality: &QualitySummary) -> Self {
+    pub fn assess(
+        writes: &WriteStats,
+        quality: &QualitySummary,
+        environment: &Environment,
+        workload: &str,
+    ) -> Self {
         let mut disqualifications = Vec::new();
         if writes.wrong_merges > 0 {
             disqualifications.push(Disqualification::WrongMerges);
@@ -116,6 +132,22 @@ impl MeasurementValidity {
         }
         if quality.failed > 0 {
             disqualifications.push(Disqualification::QueryFailures);
+        }
+        if environment.git_commit.is_none() {
+            disqualifications.push(Disqualification::UnknownGitCommit);
+        }
+        match environment.git_dirty {
+            None => disqualifications.push(Disqualification::UnknownGitState),
+            Some(true) => disqualifications.push(Disqualification::DirtyWorkingTree),
+            Some(false) => {}
+        }
+        let minimum_queries = if workload == "temporal" {
+            crate::workloads::temporal_project_count()
+        } else {
+            crate::config::MIN_PERCENTILE_SAMPLES
+        };
+        if quality.queries < minimum_queries {
+            disqualifications.push(Disqualification::InsufficientQuerySamples);
         }
         Self {
             valid: disqualifications.is_empty(),
@@ -158,7 +190,7 @@ pub struct BenchReport {
 pub const BENCHMARK_NAME: &str = "shogun-memory-bench";
 /// Report schema version. Bump when a field changes meaning, so old reports are not silently
 /// re-read under new semantics.
-pub const REPORT_VERSION: &str = "0.3";
+pub const REPORT_VERSION: &str = "0.4";
 
 impl BenchReport {
     /// Build the SLO check from the query-latency summary, if there is one.
@@ -169,6 +201,9 @@ impl BenchReport {
         measurement_valid: bool,
     ) -> Option<SloCheck> {
         let q = query_latency?;
+        if q.n < crate::config::MIN_PERCENTILE_SAMPLES {
+            return None;
+        }
         Some(SloCheck {
             name: "NFR-SLO-04 local search p95",
             threshold_ms: slo::LOCAL_SEARCH_MS,
@@ -315,6 +350,14 @@ all write-improvement scores are invalid\n",
                 "  (advisory — not a certifying run)"
             }
         ));
+    } else if let Some(query_latency) = r.query_latency {
+        if query_latency.n < crate::config::MIN_PERCENTILE_SAMPLES {
+            s.push_str(&format!(
+                "SLO\n  n/a:              {} query samples; at least {} required for p95\n\n",
+                query_latency.n,
+                crate::config::MIN_PERCENTILE_SAMPLES
+            ));
+        }
     }
 
     let validity = if r.validity.valid {
@@ -340,6 +383,32 @@ all write-improvement scores are invalid\n",
 mod tests {
     use super::*;
 
+    fn clean_environment() -> Environment {
+        Environment {
+            os: "test".to_string(),
+            arch: "test".to_string(),
+            git_commit: Some("abc123".to_string()),
+            git_dirty: Some(false),
+            profile: "release",
+        }
+    }
+
+    fn quality_with_queries(queries: usize) -> QualitySummary {
+        QualitySummary {
+            queries,
+            failed: 0,
+            recall_at_1: None,
+            recall_at_5: None,
+            recall_at_10: None,
+            mrr: None,
+            temporal_queries: 0,
+            stale_returned: 0,
+            stale_outranked_current: 0,
+            stale_rate: None,
+            stale_outranked_rate: None,
+        }
+    }
+
     #[test]
     fn opt_helpers_say_na_not_zero() {
         assert_eq!(opt_pct(None), "n/a");
@@ -351,7 +420,7 @@ mod tests {
     #[test]
     fn slo_is_not_authoritative_from_a_debug_in_memory_lexical_run() {
         let q = LatencySummary {
-            n: 10,
+            n: crate::config::MIN_PERCENTILE_SAMPLES,
             min_ms: 1.0,
             mean_ms: 1.0,
             p50_ms: 1.0,
@@ -374,7 +443,7 @@ mod tests {
     #[test]
     fn slo_is_authoritative_only_when_every_condition_holds() {
         let q = LatencySummary {
-            n: 10,
+            n: crate::config::MIN_PERCENTILE_SAMPLES,
             min_ms: 1.0,
             mean_ms: 1.0,
             p50_ms: 1.0,
@@ -393,7 +462,7 @@ mod tests {
     #[test]
     fn a_slow_run_fails_the_threshold() {
         let q = LatencySummary {
-            n: 10,
+            n: crate::config::MIN_PERCENTILE_SAMPLES,
             min_ms: 600.0,
             mean_ms: 600.0,
             p50_ms: 600.0,
@@ -419,9 +488,28 @@ mod tests {
     }
 
     #[test]
+    fn one_query_cannot_produce_an_slo_verdict() {
+        let q = LatencySummary {
+            n: 1,
+            min_ms: 1.0,
+            mean_ms: 1.0,
+            p50_ms: 1.0,
+            p95_ms: 1.0,
+            p99_ms: 1.0,
+            max_ms: 1.0,
+        };
+        let mode = RunMode {
+            semantic: true,
+            in_memory: false,
+        };
+
+        assert!(BenchReport::slo_for(Some(q), mode, "release", true).is_none());
+    }
+
+    #[test]
     fn invalid_measurement_can_never_certify_an_slo() {
         let q = LatencySummary {
-            n: 10,
+            n: crate::config::MIN_PERCENTILE_SAMPLES,
             min_ms: 1.0,
             mean_ms: 1.0,
             p50_ms: 1.0,
@@ -445,19 +533,11 @@ mod tests {
             ..Default::default()
         };
         let quality = QualitySummary {
-            queries: 1,
             failed: 3,
-            recall_at_1: None,
-            recall_at_5: None,
-            recall_at_10: None,
-            mrr: None,
-            temporal_queries: 0,
-            stale_returned: 0,
-            stale_outranked_current: 0,
-            stale_rate: None,
-            stale_outranked_rate: None,
+            ..quality_with_queries(crate::config::MIN_PERCENTILE_SAMPLES)
         };
-        let validity = MeasurementValidity::assess(&writes, &quality);
+        let validity =
+            MeasurementValidity::assess(&writes, &quality, &clean_environment(), "clean");
         assert_eq!(
             validity.disqualifications,
             vec![
@@ -466,5 +546,55 @@ mod tests {
                 Disqualification::QueryFailures,
             ]
         );
+    }
+
+    #[test]
+    fn unknown_commit_disqualifies_measurement() {
+        let environment = Environment {
+            git_commit: None,
+            ..clean_environment()
+        };
+        let validity = MeasurementValidity::assess(
+            &WriteStats::default(),
+            &quality_with_queries(crate::config::MIN_PERCENTILE_SAMPLES),
+            &environment,
+            "clean",
+        );
+
+        assert!(validity
+            .disqualifications
+            .contains(&Disqualification::UnknownGitCommit));
+    }
+
+    #[test]
+    fn dirty_tree_disqualifies_measurement() {
+        let environment = Environment {
+            git_dirty: Some(true),
+            ..clean_environment()
+        };
+        let validity = MeasurementValidity::assess(
+            &WriteStats::default(),
+            &quality_with_queries(crate::config::MIN_PERCENTILE_SAMPLES),
+            &environment,
+            "clean",
+        );
+
+        assert!(validity
+            .disqualifications
+            .contains(&Disqualification::DirtyWorkingTree));
+    }
+
+    #[test]
+    fn one_query_disqualifies_measurement() {
+        let validity = MeasurementValidity::assess(
+            &WriteStats::default(),
+            &quality_with_queries(1),
+            &clean_environment(),
+            "clean",
+        );
+
+        assert!(validity
+            .disqualifications
+            .contains(&Disqualification::InsufficientQuerySamples));
     }
 }

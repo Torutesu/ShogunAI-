@@ -26,11 +26,16 @@ pub const DEFAULT_K: usize = 10;
 pub const DEFAULT_WARMUP: usize = 20;
 
 /// Hard caps keep accidental or agent-generated inputs from exhausting the machine before the
-/// benchmark can produce a useful result.
-pub const MAX_EVENTS: usize = 10_000_000;
+/// benchmark can produce a useful result. The event cap is ten times the required 100k SLO scale;
+/// each generated event owns several strings and is also indexed by runner-side maps, so allowing
+/// ten million events would permit multi-gigabyte allocations before SQLite opened.
+pub const MAX_EVENTS: usize = 1_000_000;
 pub const MAX_QUERIES: usize = 1_000_000;
 pub const MAX_K: usize = 1_000;
 pub const MAX_WARMUP: usize = 100_000;
+
+/// Smallest sample set for which nearest-rank p95 has at least one observation above the cutoff.
+pub const MIN_PERCENTILE_SAMPLES: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
@@ -75,7 +80,7 @@ pub struct BenchConfig {
     ///
     /// Serialized as the file name only. Absolute paths carry usernames and machine layout, and a
     /// committed baseline is public (issue #221); the path's identity adds nothing to
-    /// reproducibility, which is defined by (workload, seed, events, queries) + commit + profile.
+    /// reproducibility, which is defined by the runtime knobs + mode + commit + profile.
     #[serde(serialize_with = "file_name_only")]
     pub db_path: Option<String>,
     /// Directory the JSON report is written to. `None` prints the summary and writes nothing.

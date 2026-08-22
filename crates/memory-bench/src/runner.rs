@@ -5,6 +5,7 @@
 //! lets a later intervention be measured by exactly this code.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -173,7 +174,6 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     let final_size = backend.size()?;
     let query_summary = LatencySummary::of(&query_latency);
     let quality = quality.summary(config.k);
-    let validity = crate::report::MeasurementValidity::assess(&writes, &quality);
     let mode = RunMode {
         // v0.1 measures the lexical half only. The backend passes no query embedding, so RRF fuses
         // one list and hybrid search degenerates to FTS. Wiring the ONNX embedder in (it needs a
@@ -184,6 +184,12 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         in_memory,
     };
     let environment = Environment::detect();
+    let validity = crate::report::MeasurementValidity::assess(
+        &writes,
+        &quality,
+        &environment,
+        &config.workload,
+    );
     let slo = BenchReport::slo_for(query_summary, mode, environment.profile, validity.valid);
 
     Ok(BenchReport {
@@ -283,15 +289,58 @@ fn claim_scratch_db(path: &str) -> Result<PathBuf, RunError> {
 
 /// Write the report under `out_dir` and return the file path.
 ///
-/// The filename carries workload, scale and seed so a directory of results is readable without
-/// opening any of them, and two different runs never overwrite each other.
+/// The filename carries every result-changing runtime knob and mode needed to distinguish nearby
+/// runs. Existing artifacts are never opened for writing: a repeated run gets an atomic `-runN`
+/// suffix instead.
 pub fn persist(report: &BenchReport, out_dir: &str) -> Result<std::path::PathBuf, RunError> {
+    report.config.validate()?;
     std::fs::create_dir_all(out_dir)?;
-    let name = format!(
-        "{}-{}e-{}q-seed{}.json",
-        report.config.workload, report.config.events, report.config.queries, report.config.seed
+    let storage = if report.mode.in_memory {
+        "memory"
+    } else {
+        "disk"
+    };
+    let retrieval = if report.mode.semantic {
+        "hybrid"
+    } else {
+        "lexical"
+    };
+    let stem = format!(
+        "{}-{}e-{}q-k{}-warm{}-batch{}-seed{}-{storage}-{retrieval}",
+        report.config.workload,
+        report.config.events,
+        report.config.queries,
+        report.config.k,
+        report.config.warmup,
+        report.config.write_batch,
+        report.config.seed,
     );
-    let path = std::path::Path::new(out_dir).join(name);
-    std::fs::write(&path, report.to_json()?)?;
-    Ok(path)
+    let json = report.to_json()?;
+
+    for attempt in 0..10_000usize {
+        let name = if attempt == 0 {
+            format!("{stem}.json")
+        } else {
+            format!("{stem}-run{}.json", attempt + 1)
+        };
+        let path = std::path::Path::new(out_dir).join(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(json.as_bytes())?;
+                file.sync_all()?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(RunError::Io(error)),
+        }
+    }
+
+    Err(RunError::Io(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("report namespace exhausted for {stem:?} under {out_dir:?}"),
+    )))
 }

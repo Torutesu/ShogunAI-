@@ -42,10 +42,10 @@ OPTIONS:
     -h, --help          Show this help.
 
 REPRODUCIBILITY:
-    A result is defined by (workload, seed, events, queries) plus the commit and build profile,
-    all of which are recorded in the report. Compare runs only across matching modes: a debug
-    build, an in-memory database, or a lexical-only retrieval path each disqualify a run from
-    certifying an SLO, and the report marks it.
+    A result is defined by every runtime knob plus storage/retrieval mode, commit, and build
+    profile, all of which are recorded. Compare only matching modes. Debug, in-memory, or
+    lexical-only runs cannot certify an SLO. Dirty, unknown-provenance, failed, or undersampled
+    runs are invalid for automated comparison.
 
 EXAMPLES:
     memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/bench-run --out reports
@@ -203,8 +203,15 @@ mod tests {
     #[test]
     fn out_of_bounds_numbers_are_rejected_with_the_limit_named() {
         // Issue #221: agent-generated values can be absurd; the error names the accepted range.
-        let err = parse(&args(&["--events", "10000001"])).expect_err("too many events");
-        assert!(err.contains("between 1 and 10000000"), "{err}");
+        let above_limit = (memory_bench::config::MAX_EVENTS + 1).to_string();
+        let err = parse(&["--events".to_string(), above_limit]).expect_err("too many events");
+        assert!(
+            err.contains(&format!(
+                "between 1 and {}",
+                memory_bench::config::MAX_EVENTS
+            )),
+            "{err}"
+        );
         assert!(parse(&args(&["--queries", "0"])).is_err());
         assert!(parse(&args(&["--queries", "1000001"])).is_err());
         assert!(parse(&args(&["--k", "0"])).is_err());
