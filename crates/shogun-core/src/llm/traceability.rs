@@ -37,6 +37,11 @@ pub enum Route {
     /// different: SHOGUN holds no credential and does not open the socket — a local process the
     /// user already installed does, against their plan quota.
     LocalAgent,
+    /// CS / bug-report intake (support窓口): a report the user explicitly composed and sent to
+    /// the operator's server. Distinct from [`Route::Billing`] because the payload is
+    /// user-authored text, not a licence handshake — the ledger row proves the send happened and
+    /// what size it was, per invariant 3.
+    Support,
 }
 
 impl Route {
@@ -51,6 +56,7 @@ impl Route {
             Route::Billing => "billing",
             Route::Asr => "asr",
             Route::LocalAgent => "local_agent",
+            Route::Support => "support",
         }
     }
 }
@@ -145,6 +151,7 @@ mod tests {
         assert_eq!(Route::Billing.as_db_str(), "billing");
         assert_eq!(Route::Asr.as_db_str(), "asr");
         assert_eq!(Route::LocalAgent.as_db_str(), "local_agent");
+        assert_eq!(Route::Support.as_db_str(), "support");
     }
 
     #[test]

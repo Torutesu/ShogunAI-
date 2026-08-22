@@ -57,6 +57,7 @@ mod search_ui;
 #[cfg(target_os = "macos")]
 mod sound;
 mod startup_health;
+mod support;
 mod user_config_watch;
 mod visual_recall;
 mod voice_editor;

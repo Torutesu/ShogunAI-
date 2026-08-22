@@ -4921,6 +4921,114 @@ const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
 const GESTURE_ACTIONS = new Set(["draft", "recall"]);
 
 
+/** Help & Support — the CS / bug-report intake (support窓口). Category + message (+ optional
+ *  reply email) posted through `support_submit_report`; the Rust side owns validation, the
+ *  diagnostics tuple, and the egress-ledger row. Diagnostics are an explicit checkbox whose
+ *  label names the three fields exactly, so what leaves the device is what the user read. */
+function HelpSupportSection(): JSX.Element {
+  const [category, setCategory] = useState<"bug" | "feedback" | "question">("bug");
+  const [message, setMessage] = useState("");
+  const [email, setEmail] = useState("");
+  const [diagnostics, setDiagnostics] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [ticket, setTicket] = useState("");
+  const [err, setErr] = useState("");
+  const focusField = (focused: boolean): void => {
+    if (IN_TAURI) void invoke("focus_field", { focused }).catch(() => undefined);
+  };
+  const canSend = message.trim().length >= 5 && !sending;
+  const send = (): void => {
+    if (!IN_TAURI || !canSend) return;
+    setSending(true);
+    setErr("");
+    setTicket("");
+    void invoke<string>("support_submit_report", {
+      category,
+      message: message.trim(),
+      email: email.trim() || null,
+      includeDiagnostics: diagnostics,
+    })
+      .then((id) => {
+        setTicket(id);
+        setMessage("");
+      })
+      .catch((e) => setErr(String(e)))
+      .finally(() => setSending(false));
+  };
+  const categories = [
+    { id: "bug" as const, label: t.supCategoryBug },
+    { id: "feedback" as const, label: t.supCategoryFeedback },
+    { id: "question" as const, label: t.supCategoryQuestion },
+  ];
+  return (
+    <section className="set">
+      <div className="set__label">{t.supTitle}</div>
+      <div className="set__hint">{t.supHint}</div>
+      <div className="set__label" id="seg-support-category">{t.supCategoryLabel}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-support-category">
+        {categories.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            role="radio"
+            aria-checked={category === c.id}
+            className={`seg__opt${category === c.id ? " is-on" : ""}`}
+            onClick={() => setCategory(c.id)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <textarea
+        className="keyrow__input"
+        style={{ minHeight: 96, resize: "vertical", width: "100%", boxSizing: "border-box" }}
+        value={message}
+        placeholder={t.supMessagePlaceholder}
+        maxLength={4000}
+        onChange={(e) => setMessage(e.target.value)}
+        onFocus={() => focusField(true)}
+        onBlur={() => focusField(false)}
+      />
+      {message.trim().length > 0 && message.trim().length < 5 ? (
+        <div className="set__hint">{t.supTooShort}</div>
+      ) : null}
+      <div className="set__label">{t.supEmailLabel}</div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="email"
+          value={email}
+          placeholder={t.supEmailPlaceholder}
+          maxLength={254}
+          autoComplete="off"
+          onChange={(e) => setEmail(e.target.value)}
+          onFocus={() => focusField(true)}
+          onBlur={() => focusField(false)}
+        />
+      </div>
+      <div className="set__hint">{t.supEmailHint}</div>
+      <label className="set__hint" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input
+          type="checkbox"
+          checked={diagnostics}
+          onChange={(e) => setDiagnostics(e.target.checked)}
+        />
+        {t.supDiagnostics}
+      </label>
+      <div className="set__hint">{t.supDiagnosticsHint}</div>
+      <div className="keyrow">
+        <button className="keyrow__btn" type="button" onClick={send} disabled={!canSend}>
+          {sending ? t.supSending : t.supSend}
+        </button>
+      </div>
+      {ticket ? (
+        <div className="set__hint is-ok">{t.supSent.replace("{id}", ticket.slice(0, 8))}</div>
+      ) : null}
+      {err ? <div className="set__hint is-err">{err}</div> : null}
+    </section>
+  );
+}
+
 /** Privacy & Security (issue #28). One place for the LLM key, the data-use policy, and data
  *  deletion. The BYOK key entry lived inline in `Settings`; it moves here so the key, its
  *  "encrypted in the Keychain" promise, and the deletion controls all read as one privacy story.
@@ -5281,7 +5389,8 @@ export type SettingsSectionId =
   | "connections"
   | "intelligence"
   | "controls"
-  | "privacy";
+  | "privacy"
+  | "help";
 
 const SettingsActiveSectionContext = createContext<SettingsSectionId>("general");
 
@@ -5308,6 +5417,7 @@ const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   { id: "intelligence", label: t.settingsIntelligence, description: t.settingsIntelligenceHint },
   { id: "controls", label: t.settingsControls, description: t.settingsControlsHint },
   { id: "privacy", label: t.settingsPrivacy, description: t.settingsPrivacyHint },
+  { id: "help", label: t.settingsHelp, description: t.settingsHelpHint },
 ];
 
 function SettingsSectionIcon({ section }: { section: SettingsSectionId }): JSX.Element {
@@ -5328,6 +5438,8 @@ function SettingsSectionIcon({ section }: { section: SettingsSectionId }): JSX.E
   if (section === "connections") return <svg {...common}><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="m8.3 10.9 7.4-3.8M8.3 13.1l7.4 3.8" /></svg>;
   if (section === "intelligence") return <svg {...common}><path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z" /><path d="m18 14 .8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8L18 14Z" /></svg>;
   if (section === "controls") return <svg {...common}><rect x="3.5" y="5" width="17" height="14" rx="3" /><path d="M7 10h2M15 10h2M8 14h8" /></svg>;
+  // Life buoy — the Help & Support section (CS窓口).
+  if (section === "help") return <svg {...common}><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3.5" /><path d="m5.9 5.9 3.6 3.6M14.5 14.5l3.6 3.6M18.1 5.9l-3.6 3.6M9.5 14.5l-3.6 3.6" /></svg>;
   return <svg {...common}><path d="M12 3 5 6v5c0 4.6 2.8 8.1 7 10 4.2-1.9 7-5.4 7-10V6l-7-3Z" /><path d="M9.5 12.2 11 13.7l3.7-3.7" /></svg>;
 }
 
@@ -5862,6 +5974,9 @@ function Settings(props: {
             </div>
           )}
         </section>
+        </SettingsSlot>
+        <SettingsSlot section="help">
+          <HelpSupportSection />
         </SettingsSlot>
           </div>
           </SettingsActiveSectionContext.Provider>

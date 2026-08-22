@@ -34,6 +34,9 @@ pub enum Route {
     /// subscription (Issue #110). Distinct from [`Route::MessagesApi`]: SHOGUN holds no credential
     /// and does not open the socket — a separate local process does, against the user's plan quota.
     LocalAgent,
+    /// CS / bug-report intake (support窓口; V21): a report the user explicitly composed and sent
+    /// to the operator's server. User-authored text, user-initiated — never third-party.
+    Support,
 }
 
 impl Route {
@@ -48,6 +51,7 @@ impl Route {
             Route::Billing => "billing",
             Route::Asr => "asr",
             Route::LocalAgent => "local_agent",
+            Route::Support => "support",
         }
     }
 
@@ -63,6 +67,7 @@ impl Route {
             "billing" => Route::Billing,
             "asr" => Route::Asr,
             "local_agent" => Route::LocalAgent,
+            "support" => Route::Support,
             _ => return None,
         })
     }

@@ -58,8 +58,9 @@ pub mod mac {
 
     /// The licence API origin: `SHOGUN_LICENSE_API` (staging / dev, debug builds only) else
     /// production. A release build that honoured the env could be pointed at an attacker's
-    /// "licence API".
-    fn api_origin() -> String {
+    /// "licence API". `pub(crate)` because the support intake (support.rs) posts to the same
+    /// backend and must follow the same staging override.
+    pub(crate) fn api_origin() -> String {
         #[cfg(debug_assertions)]
         if let Some(o) = std::env::var("SHOGUN_LICENSE_API")
             .ok()

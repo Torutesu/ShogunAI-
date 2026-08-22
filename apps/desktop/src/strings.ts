@@ -171,7 +171,27 @@ export const STRINGS = {
     settingsControlsHint: "Shortcuts, notch placement, and visibility.",
     settingsPrivacy: "Privacy",
     settingsPrivacyHint: "Keys, data boundaries, and memory reset.",
+    settingsHelp: "Help",
+    settingsHelpHint: "Report a bug, share feedback, or ask a question.",
     settingsSectionNav: "Settings sections",
+    // ── Help & Support (CS / bug-report intake) ──────────────────────────────
+    supTitle: "Report a problem",
+    supHint:
+      "Goes straight to the people who build SHOGUN. Your report is the only thing sent — never your screen, memory, or keys.",
+    supCategoryLabel: "What is this about?",
+    supCategoryBug: "Bug",
+    supCategoryFeedback: "Feedback",
+    supCategoryQuestion: "Question",
+    supMessagePlaceholder: "What happened? What did you expect instead?",
+    supEmailLabel: "Reply-to email (optional)",
+    supEmailPlaceholder: "you@example.com",
+    supEmailHint: "Only if you'd like an answer. Leaving it empty still files the report.",
+    supDiagnostics: "Include app version, macOS version, and plan",
+    supDiagnosticsHint: "Three short labels that make bugs much faster to fix. Nothing else.",
+    supSend: "Send report",
+    supSending: "Sending…",
+    supSent: "Received — reference {id}. Thank you.",
+    supTooShort: "A few more words will help us act on it.",
     // Earlier conversations. Kept out of the way by default: the panel is for asking something
     // now, not for reading back a transcript.
     history: "Earlier messages",
