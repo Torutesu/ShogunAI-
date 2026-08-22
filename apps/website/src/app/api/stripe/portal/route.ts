@@ -4,10 +4,21 @@ import { findLicenseByKey } from '@/db/billing-queries';
 import { HttpError, fail, readJsonObject } from '@/lib/http';
 import { isValidLicenseKey } from '@/lib/license';
 import { rateLimit } from '@/lib/rate-limit';
+import { withTimeout } from '@/lib/timeout';
 import { appOrigin, stripeSecretKey, stripe } from '@/lib/stripe';
 import { clientIp } from '@/lib/waitlist-auth';
 
 export const runtime = 'nodejs';
+
+/**
+ * Deadline for the database reads this route waits on. A stalled connection is not a rejected
+ * promise, so without this the Workers runtime kills the request and the route's own error
+ * handling never runs — the caller gets a dead request instead of the 500 it is written to
+ * return. A 500 matters here: a subscriber clicking through to manage their
+ * billing gets an error they can retry rather than a page that never answers.
+ */
+const DB_TIMEOUT_MS = 3_000;
+
 
 /**
  * POST /api/stripe/portal — issue #8, the "90% of billing ops go to the Customer Portal" goal.
@@ -34,7 +45,7 @@ export async function POST(req: Request) {
   if (!isValidLicenseKey(key)) return fail('bad_request');
 
   try {
-    const license = await findLicenseByKey(key);
+    const license = await withTimeout(findLicenseByKey(key), DB_TIMEOUT_MS, 'licence lookup');
     // Same answer for "no such licence" and "revoked": a portal link is account access.
     if (!license || license.revokedAt) return fail('not_found');
 

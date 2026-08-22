@@ -18,9 +18,20 @@ import {
 } from '@/lib/license';
 import { isPlanId } from '@/lib/pricing';
 import { rateLimit } from '@/lib/rate-limit';
+import { withTimeout } from '@/lib/timeout';
 import { clientIp } from '@/lib/waitlist-auth';
 
 export const runtime = 'nodejs';
+
+/**
+ * Deadline for the database reads this route waits on. A stalled connection is not a rejected
+ * promise, so without this the Workers runtime kills the request and the route's own error
+ * handling never runs — the caller gets a dead request instead of the 500 it is written to
+ * return. A 500 matters here: the desktop app treats it as "could not check" and stays inside its
+ * offline grace window, where a dead request just looks like the network is down.
+ */
+const DB_TIMEOUT_MS = 3_000;
+
 export const dynamic = 'force-dynamic';
 
 /**
@@ -57,10 +68,14 @@ export async function POST(req: Request) {
   const appVersion = typeof body.app_version === 'string' ? body.app_version.slice(0, 32) : null;
 
   try {
-    const license = await findLicenseByKey(key);
+    const license = await withTimeout(findLicenseByKey(key), DB_TIMEOUT_MS, 'licence lookup');
     if (!license || license.revokedAt) return fail('not_found');
 
-    const sub = await findSubscription(license.stripeSubscriptionId);
+    const sub = await withTimeout(
+      findSubscription(license.stripeSubscriptionId),
+      DB_TIMEOUT_MS,
+      'subscription lookup',
+    );
     if (!sub) return fail('not_found');
 
     const rec: SubscriptionRecord = {
@@ -81,7 +96,11 @@ export async function POST(req: Request) {
     const nowMs = Date.now();
     const entitled = isEntitled(rec, nowMs);
 
-    await recordVerification(license.id, deviceId, appVersion).catch((e) => {
+    await withTimeout(
+      recordVerification(license.id, deviceId, appVersion),
+      DB_TIMEOUT_MS,
+      'verification record',
+    ).catch((e) => {
       // Bookkeeping must never cost a paying customer their access.
       console.error('license verification bookkeeping failed:', e);
     });
