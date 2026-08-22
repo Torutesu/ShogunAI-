@@ -487,18 +487,13 @@ export function MeetingOverlay(): JSX.Element | null {
   }, [view?.state]);
 
   useEffect(() => {
-    if (!ccOn) {
-      setDispOpen(false);
-      return;
-    }
-    setModeOpen(false);
-    setLangOpen(null);
+    if (!ccOn) setDispOpen(false);
   }, [ccOn]);
 
   // Grow host window while the bar mode menu is open (menu sits above the pill).
   useEffect(() => {
     if (!isHost || view?.state !== "recording") return;
-    const menu = modeOpen && !ccOn;
+    const menu = modeOpen;
     const size = menu ? HOST_PILL_WITH_MENU_SIZE : HOST_PILL_SIZE;
     call("meeting_set_overlay_size", { width: size.w, height: size.h, label: "meeting" });
   }, [isHost, view?.state, modeOpen, ccOn]);
@@ -657,10 +652,9 @@ export function MeetingOverlay(): JSX.Element | null {
 
   const setMode = (mode: MeetingMode): void => {
     setSettings((s) => ({ ...s, meeting_mode: mode }));
-    // Captions panel has its own lang row — close the mode list there.
-    // Host More keeps open for translate modes so source/target (or my/other) stay reachable
-    // without opening captions first.
-    if (ccOn || mode === "transcription") {
+    // Keep host More open for translate modes so source/target (or my/other) stay reachable.
+    // This must work while captions are open too: the host and captions are separate webviews.
+    if (mode === "transcription") {
       setModeOpen(false);
     }
     setLangOpen(null);
@@ -1193,12 +1187,11 @@ export function MeetingOverlay(): JSX.Element | null {
           <div className="ov__bar-slot ov__bar-slot--more">
             <button
               type="button"
-              className={`ov__bar-btn${modeOpen && !ccOn ? " is-on" : ""}`}
-              aria-expanded={modeOpen && !ccOn}
+              className={`ov__bar-btn${modeOpen ? " is-on" : ""}`}
+              aria-expanded={modeOpen}
               aria-label={t.meetingMore}
               onClick={() => {
-                if (ccOn) return;
-                setModeOpen(!modeOpen);
+                setModeOpen((open) => !open);
                 setLangOpen(null);
               }}
             >
@@ -1207,7 +1200,7 @@ export function MeetingOverlay(): JSX.Element | null {
             <span className="ov__bar-tip" role="tooltip">
               {t.meetingMore}
             </span>
-            {modeOpen && !ccOn ? (
+            {modeOpen ? (
               <div className="ov__modemenu ov__modemenu--bar" role="listbox">
                 {MODES.map((m) => (
                   <button
