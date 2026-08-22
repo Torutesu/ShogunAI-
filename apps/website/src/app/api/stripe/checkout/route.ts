@@ -92,6 +92,14 @@ export async function POST(req: Request) {
       `checkout error: type=${String(err.type)} code=${String(err.code)} ` +
         `param=${String(err.param)} message=${String(err.message)}`,
     );
+    // Stripe answers `resource_missing` on the price when the configured Price IDs and the secret
+    // key belong to different modes — a live key cannot see a test price, and vice versa. Nothing
+    // in a Price ID encodes its mode, so no startup check can catch this; naming it in the
+    // response is what keeps the next occurrence from being a log-archaeology exercise. Safe to
+    // expose: it describes our own misconfiguration, not the buyer or the key.
+    if (err.code === 'resource_missing' && String(err.param).includes('price')) {
+      return fail('server_error', { reason: 'price_mode_mismatch' });
+    }
     return fail('server_error');
   }
 }
