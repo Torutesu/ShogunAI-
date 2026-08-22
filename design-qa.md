@@ -96,3 +96,27 @@ The same-viewport comparison confirms that the original black slab no longer tra
 - A frame-callback watch provides frame-level stopping in supported browsers; `timeupdate` remains as the compatibility fallback.
 
 final result: passed
+
+## Mobile hero centering and Japanese subtitle QA
+
+- Source visual truth: `/var/folders/73/8h5shzqn3nj4zmn32ntdtp6c0000gn/T/TemporaryItems/NSIRD_screencaptureui_It8eZ1/スクリーンショット 2026-08-22 14.41.43.png`
+- Implementation screenshot: `/tmp/shogun-hero-centered-430.png`
+- Combined comparison: `/tmp/shogun-hero-centering-comparison.png`
+- Viewport: `430 × 932` CSS px, light theme, Japanese locale, initial hero state
+- Source pixels: `1086 × 1572`; the `856 × 1572` page-content crop was normalized to `430 × 790`
+- Implementation pixels: `430 × 932` at device scale factor `1`
+
+The normalized source and implementation were compared side by side. The headline bounding box is `x=61.33`, `width=307.34` inside a `430px` viewport, giving a center of `215px`, exactly matching the viewport center.
+
+- P0: none
+- P1: none
+- P2: none after centering the headline on mobile and retaining desktop left alignment
+- Typography: existing family, size, weight, line height, tracking, and two-line wrap are preserved.
+- Spacing and layout rhythm: only the headline's horizontal placement changed.
+- Colors and visual tokens: unchanged.
+- Image quality and asset fidelity: unchanged.
+- Copy: `人に届くものだけ、あなたの承認を待ちます。` was removed from the Japanese hero subtitle.
+
+Iteration: the earlier mobile headline max-width box aligned to its parent's left edge. Adding mobile auto inline margins and resetting them at the desktop breakpoint moved the rendered center to `215px` without surrounding layout drift.
+
+final result: passed

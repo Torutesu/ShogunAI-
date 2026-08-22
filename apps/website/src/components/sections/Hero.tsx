@@ -27,7 +27,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
             </div>
 
             <div>
-              <h1 className="hero-title mt-5 max-w-[15ch] font-display text-[clamp(36px,4.5vw,58px)] font-semibold leading-[0.98] tracking-[-0.055em] text-balance sm:mt-6">
+              <h1 className="hero-title mx-auto mt-5 max-w-[15ch] font-display text-[clamp(36px,4.5vw,58px)] font-semibold leading-[0.98] tracking-[-0.055em] text-balance sm:mt-6 lg:mx-0">
                 {t.hero.lineA}
                 <br />
                 <span className="hero-accent">{t.hero.lineB}</span>

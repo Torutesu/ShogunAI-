@@ -514,7 +514,7 @@ const ja: Dictionary = {
     invitedTier: (label: string) => ` · ${label} を利用中`,
     lineA: 'あなたのPCに、',
     lineB: 'あなただけのAGI。',
-    sub: '仕事を終わらせるための、PC上のパーソナルAGI。あなたの一日を Mac の中に記憶し、ツールをまたいで動きます。人に届くものだけ、あなたの承認を待ちます。',
+    sub: '仕事を終わらせるための、PC上のパーソナルAGI。あなたの一日を Mac の中に記憶し、ツールをまたいで動きます。',
     mockToday: '今日 · 木曜',
     mockHeading: '一日は、もう把握されている',
     mockLive: 'ライブ記録',
