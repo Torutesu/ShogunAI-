@@ -1,0 +1,38 @@
+[package]
+name = "memory-bench"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN memory benchmark: deterministic synthetic workloads and p95 measurement over the real memory layer (WP2.6, NFR-SLO-04)."
+
+# Platform-independent, exactly like the crate it measures: shogun-memory bundles SQLite, so the
+# whole bench runs on Linux CI. Percentiles, the CPU delta arithmetic and the SLO constants come
+# from spike-harness — the Phase 0 asset that was always meant to be carried forward (spec §2.1)
+# — rather than being reimplemented here.
+#
+# Dependency-light on purpose (no clap, no rand): argument parsing is hand-rolled like
+# shogun-cli's, and the PRNG is a SplitMix64 defined in-tree so a workload is reproducible from
+# its seed forever, independent of any crate's internal algorithm changing between versions.
+
+[lib]
+name = "memory_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "memory-bench"
+path = "src/bin/memory-bench.rs"
+
+[dependencies]
+shogun-memory = { path = "../shogun-memory" }
+spike-harness = { path = "../spike-harness" }
+# Same version and features as shogun-memory: the bench holds the `Connection` its API returns,
+# so it must resolve to that one SQLite build, not a second one.
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[lints]
+workspace = true

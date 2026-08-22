@@ -106,6 +106,16 @@ jobs:
           python3 scripts/check-batch-source-filter.py
       - name: release build (SLO code path)
         run: cargo build -p spike-harness --release
+      # WP2.6 requires the p95 search bench to run on Linux CI. `cargo test --workspace` above
+      # already runs memory-bench's smoke tests (the library path); this exercises the *binary* and
+      # its argument parsing, which no library test covers, and prints a report into the log.
+      #
+      # Deliberately small and deliberately a debug build: this step is a health check, not a
+      # measurement. The report stamps `profile: debug` and marks the SLO verdict
+      # non-authoritative, so nothing here can be mistaken for an SLO pass. The real 100k
+      # measurement is `.github/workflows/memory-bench.yml`, run on demand.
+      - name: memory bench smoke (binary + CLI)
+        run: cargo run -q -p memory-bench -- --workload clean --events 2000 --queries 50 --seed 42
 
   desktop-frontend:
     name: desktop frontend (typecheck + build)

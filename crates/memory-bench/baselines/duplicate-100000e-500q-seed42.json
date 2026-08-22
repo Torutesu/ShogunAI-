@@ -1,0 +1,83 @@
+{
+  "benchmark": "shogun-memory-bench",
+  "version": "0.1",
+  "config": {
+    "workload": "duplicate",
+    "seed": 42,
+    "events": 100000,
+    "queries": 500,
+    "k": 10,
+    "warmup": 20,
+    "db_path": "C:\\Users\\sisig\\AppData\\Local\\Temp\\claude\\d--ShogunAI\\1fe674f8-b7dc-4584-a7c3-48315f3ef914\\scratchpad\\db\\d.db",
+    "out_dir": "C:\\Users\\sisig\\AppData\\Local\\Temp\\claude\\d--ShogunAI\\1fe674f8-b7dc-4584-a7c3-48315f3ef914\\scratchpad\\out\\reports",
+    "write_batch": 1000
+  },
+  "environment": {
+    "os": "windows",
+    "arch": "x86_64",
+    "git_commit": "79f8516c4161dbe422f573ca3fad068c12ac067a",
+    "git_dirty": false,
+    "profile": "release"
+  },
+  "mode": {
+    "semantic": false,
+    "in_memory": false
+  },
+  "backend": "shogun-memory",
+  "writes": {
+    "submitted": 100000,
+    "deduplicated": 16535,
+    "failed": 0,
+    "rows_after": 83465,
+    "unique_facts": 70000,
+    "duplicate_events": 30000
+  },
+  "write_latency": {
+    "n": 100000,
+    "min_ms": 0.0673,
+    "mean_ms": 0.2326839929999987,
+    "p50_ms": 0.1448,
+    "p95_ms": 0.4658,
+    "p99_ms": 1.2164,
+    "max_ms": 91.8524
+  },
+  "query_latency": {
+    "n": 500,
+    "min_ms": 7.9582,
+    "mean_ms": 18.250628600000006,
+    "p50_ms": 16.3295,
+    "p95_ms": 35.4026,
+    "p99_ms": 40.9308,
+    "max_ms": 46.499
+  },
+  "quality": {
+    "queries": 500,
+    "failed": 0,
+    "recall_at_1": 1.0,
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "mrr": 1.0,
+    "temporal_queries": 0,
+    "stale_returned": 0,
+    "stale_outranked_current": 0,
+    "stale_rate": null,
+    "stale_outranked_rate": null
+  },
+  "resources": null,
+  "storage": {
+    "initial_logical_bytes": 303104,
+    "final_logical_bytes": 61087744,
+    "final_file_bytes": 78617992,
+    "bytes_per_row": 731.8965314802612
+  },
+  "slo": {
+    "name": "NFR-SLO-04 local search p95",
+    "threshold_ms": 500.0,
+    "measured_p95_ms": 35.4026,
+    "verdict": "Pass",
+    "authoritative": false
+  },
+  "write_amplification": 1.192357142857143,
+  "duplicate_collapse_rate": 0.5511666666666667,
+  "wall_seconds": 39.2751644
+}
