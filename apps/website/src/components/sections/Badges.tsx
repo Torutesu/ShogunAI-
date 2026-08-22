@@ -44,7 +44,7 @@ function AwardBanner({
         height={height}
         sizes={sizes}
         priority={priority}
-        className={`h-full w-auto max-w-full object-contain ${scaleClassName}`}
+        className={`h-auto max-h-full w-auto max-w-full object-contain ${scaleClassName}`}
       />
     </div>
   );
@@ -73,7 +73,7 @@ function ProductHuntBadge() {
           alt="ShogunAI - Your personal AGI on your PC. Built to finish real work. | Product Hunt"
           width={250}
           height={54}
-          className="h-full w-auto max-w-[248px] object-contain sm:max-w-[352px]"
+          className="h-auto max-h-full w-auto max-w-[240px] object-contain sm:max-w-[352px]"
         />
       </a>
     </div>
@@ -116,28 +116,34 @@ export function Badges({ t }: { t: Dictionary }) {
   const ph = t.authority.items.find((b) => b.tone === 'ph');
 
   return (
-    <div className="mx-auto grid w-full max-w-[1000px] grid-cols-3 items-center justify-items-center gap-x-6 gap-y-6 sm:gap-x-12">
-      <AwardBanner
-        src="/optimized/yc-rfs-hackathon-2026.png"
-        alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
-        width={2055}
-        height={765}
-        sizes="(max-width: 1024px) 92vw, 420px"
-        priority
-        widthClassName="w-full max-w-[260px] sm:max-w-[360px]"
-        href="https://x.com/toruai/status/2082832405514395962?s=20"
-        linkLabel="Open the YC RFS Hackathon 2026 win announcement on X"
-      />
-      {ph ? <ProductHuntBadge /> : <div />}
-      <AwardBanner
-        src="/badges/nvidia-inception-program.png"
-        alt="NVIDIA Inception Program member badge"
-        width={1221}
-        height={662}
-        sizes="(max-width: 1024px) 92vw, 420px"
-        widthClassName="w-full max-w-[190px] sm:max-w-[262px]"
-        surfaceClassName="theme-light-badge"
-      />
+    <div className="mx-auto grid w-full max-w-[560px] grid-cols-2 items-center justify-items-center gap-x-3 gap-y-3 px-2 sm:max-w-[1000px] sm:grid-cols-3 sm:gap-x-12 sm:gap-y-6 sm:px-0">
+      <div className="order-1 flex w-full justify-center sm:order-none">
+        <AwardBanner
+          src="/optimized/yc-rfs-hackathon-2026.png"
+          alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
+          width={2055}
+          height={765}
+          sizes="(max-width: 639px) 46vw, (max-width: 1024px) 30vw, 360px"
+          priority
+          widthClassName="w-full max-w-[180px] sm:max-w-[360px]"
+          href="https://x.com/toruai/status/2082832405514395962?s=20"
+          linkLabel="Open the YC RFS Hackathon 2026 win announcement on X"
+        />
+      </div>
+      <div className="order-3 col-span-2 flex w-full justify-center sm:order-none sm:col-span-1">
+        {ph ? <ProductHuntBadge /> : null}
+      </div>
+      <div className="order-2 flex w-full justify-center sm:order-none">
+        <AwardBanner
+          src="/badges/nvidia-inception-program.png"
+          alt="NVIDIA Inception Program member badge"
+          width={1221}
+          height={662}
+          sizes="(max-width: 639px) 40vw, (max-width: 1024px) 24vw, 262px"
+          widthClassName="w-full max-w-[150px] sm:max-w-[262px]"
+          surfaceClassName="theme-light-badge"
+        />
+      </div>
       <BrandfetchLogoStrip />
     </div>
   );
