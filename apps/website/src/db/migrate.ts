@@ -4,12 +4,45 @@ import postgres from 'postgres';
  * Idempotent schema bootstrap. Run with `npm run db:migrate`.
  * For real deployments prefer `drizzle-kit generate` + versioned migrations;
  * this exists so the engine can be driven end-to-end with one command.
+ *
+ * `.trim()` normalises a value pasted into a CI secret. postgres.js happens to tolerate a trailing
+ * newline today (verified against postgres:16), so it is defensive rather than a fix; `||` rather
+ * than `??` is the part that matters, so a whitespace-only secret falls back to the local default
+ * instead of being sent as a connection string.
  */
 const url =
-  process.env.DATABASE_URL ??
+  process.env.DATABASE_URL?.trim() ||
   'postgres://postgres:postgres@localhost:5432/shogun_waitlist';
 
 const sql = postgres(url, { max: 1 });
+
+/**
+ * What the connection string actually parsed to, with the password removed.
+ *
+ * A failed migrate blocks the whole deploy, so the log has to answer "which of the five parts is
+ * wrong" without anyone having to reproduce it locally — and it has to do that without printing
+ * the credential into a public Actions log.
+ */
+function describeUrl(raw: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return 'DATABASE_URL is not a parseable URL (a raw `/ # ? %` in the password must be percent-encoded)';
+  }
+  const password = decodeURIComponent(u.password);
+  const placeholder = /^\[.*\]$/.test(password) ? ' — still the dashboard placeholder!' : '';
+  return [
+    `user=${u.username || '(none)'}`,
+    `host=${u.hostname}`,
+    `port=${u.port || '(default)'}`,
+    `database=${u.pathname.replace(/^\//, '') || '(none)'}`,
+    `password=${password ? `set${placeholder}` : '(EMPTY)'}`,
+    raw !== (process.env.DATABASE_URL ?? raw) ? 'note: surrounding whitespace was trimmed' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
 
 async function main() {
   await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto`;
@@ -189,5 +222,14 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
+  // 28P01 is the one failure that is never about the schema: the migration never ran, so the
+  // deploy that depends on it is blocked by a credential, not by a broken statement.
+  if ((err as { code?: string })?.code === '28P01') {
+    console.error(
+      `\nDATABASE_URL was rejected by the server. Parsed as: ${describeUrl(url)}\n` +
+        'Copy the Session pooler string from Supabase → Project Settings → Database, substitute ' +
+        'the real password, and re-set the secret with no trailing newline.',
+    );
+  }
   process.exit(1);
 });
