@@ -138,3 +138,67 @@ export function IconSliders(props: IconProps) {
     </svg>
   );
 }
+
+/** Eye — visibility control in meeting quick settings. */
+export function IconEye(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M2.5 12s3.4-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </svg>
+  );
+}
+
+/** Open book — personal vocabulary and dictionary. */
+export function IconBookOpen(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 6.5C10.7 5.5 9.1 5 7.5 5H4v14h3.5c1.6 0 3.2.5 4.5 1.5" />
+      <path d="M12 6.5c1.3-1 2.9-1.5 4.5-1.5H20v14h-3.5c-1.6 0-3.2.5-4.5 1.5" />
+      <path d="M12 6.5v14" />
+    </svg>
+  );
+}
+
+/** Globe — translation language and mode. */
+export function IconGlobe(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3c2.3 2.5 3.5 5.5 3.5 9S14.3 18.5 12 21" />
+      <path d="M12 3c-2.3 2.5-3.5 5.5-3.5 9S9.7 18.5 12 21" />
+    </svg>
+  );
+}
+
+/** Keyboard — global shortcut settings. */
+export function IconKeyboard(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M6 9h.01M9 9h.01M12 9h.01M15 9h.01M18 9h.01M6 13h.01M9 13h.01M12 13h.01M15 13h.01" />
+      <path d="M7 16h10" />
+    </svg>
+  );
+}
+
+/** Microphone — selected recording input. */
+export function IconMicrophone(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6" />
+    </svg>
+  );
+}
+
+/** Speaker — system-audio capture mode. */
+export function IconVolume2(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+      <path d="M15.5 9.5a4 4 0 0 1 0 5M18 7a7.5 7.5 0 0 1 0 10" />
+    </svg>
+  );
+}

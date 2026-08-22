@@ -608,9 +608,13 @@ impl MemoryBackend for DbBackend {
             | Tool::LessonsList
             | Tool::ProfileWhoami
             | Tool::VoiceDictionaryList
+            // Meeting microphone settings live in the shared app-data file and are intercepted
+            // before the DB backend by the MCP/REST adapter.
+            | Tool::MeetingMicrophoneGet
             | Tool::VoiceDictionaryCreate
             | Tool::VoiceDictionaryUpdate
             | Tool::VoiceDictionaryDelete
+            | Tool::MeetingMicrophoneSet
             | Tool::LessonsSetActive
             | Tool::VisualRecallStatus
             | Tool::VisualRecallSearchFrames

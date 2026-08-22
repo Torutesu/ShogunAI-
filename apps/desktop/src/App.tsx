@@ -428,6 +428,7 @@ export function App(): JSX.Element {
   /// anything above it is history rather than part of what you're doing now.
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [requestedSettingsSection, setRequestedSettingsSection] = useState<SettingsSectionId>("general");
   /** Idle chin: reading/app/due vs quiet welded hide. Persisted in app data (Rust). */
   const [showStatusInNotch, setShowStatusInNotch] = useState(true);
   /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
@@ -608,6 +609,15 @@ export function App(): JSX.Element {
       listen("summon", () => {
         setOpen(true);
         sizeForViewRef.current({ open: true });
+      }),
+    );
+    offs.push(
+      listen<{ section?: SettingsSectionId }>("meeting_open_settings", (event) => {
+        setRequestedSettingsSection(event.payload.section ?? "voice");
+        setOpen(true);
+        setShowSettings(true);
+        setShowHub(false);
+        sizeForViewRef.current({ open: true, settings: true, hub: false });
       }),
     );
     offs.push(
@@ -1494,6 +1504,7 @@ export function App(): JSX.Element {
         <div className="panel__body">
         {showSettings ? (
           <Settings
+            initialSection={requestedSettingsSection}
             appearance={appearance}
             setAppearance={setAppearance}
             showStatusInNotch={showStatusInNotch}
@@ -3668,6 +3679,11 @@ function SoundSection(): JSX.Element {
 function MeetingSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [micOnly, setMicOnly] = useState(false);
+  const [microphone, setMicrophone] = useState<string | null>(null);
+  const [microphones, setMicrophones] = useState<Array<{ name: string; ambiguous: boolean }>>([]);
+  const [microphonesLoaded, setMicrophonesLoaded] = useState(false);
+  const [microphoneBusy, setMicrophoneBusy] = useState(false);
+  const [microphoneError, setMicrophoneError] = useState("");
   const [busy, setBusy] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
   const [deepgramKey, setDeepgramKey] = useState({ has_key: false, key_last4: "" });
@@ -3676,12 +3692,13 @@ function MeetingSection(): JSX.Element {
 
   const load = (): void => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean; excluded_apps: string[]; allow_mic_only_detect?: boolean }>(
+    void invoke<{ enabled: boolean; excluded_apps: string[]; allow_mic_only_detect?: boolean; microphone?: string | null }>(
       "get_meeting_settings",
     )
       .then((s) => {
         setOn(s.enabled);
         setMicOnly(s.allow_mic_only_detect ?? false);
+        setMicrophone(s.microphone ?? null);
         setExcluded(s.excluded_apps ?? []);
       })
       .catch(() => undefined);
@@ -3694,6 +3711,31 @@ function MeetingSection(): JSX.Element {
   };
 
   useEffect(load, []);
+
+  const loadMicrophones = (): void => {
+    if (!IN_TAURI || microphonesLoaded) return;
+    void invoke<Array<{ name: string; ambiguous: boolean }>>("get_meeting_microphones")
+      .then((devices) => {
+        setMicrophones(devices);
+        setMicrophonesLoaded(true);
+      })
+      .catch(() => setMicrophoneError(t.voiceMicrophoneUnavailable));
+  };
+
+  const selectMicrophone = (next: string): void => {
+    const selected = next || null;
+    const previous = microphone;
+    setMicrophone(selected);
+    setMicrophoneError("");
+    if (!IN_TAURI) return;
+    setMicrophoneBusy(true);
+    void invoke("set_meeting_microphone", { microphone: selected })
+      .catch(() => {
+        setMicrophone(previous);
+        setMicrophoneError(t.meetingMicrophoneSaveFailed);
+      })
+      .finally(() => setMicrophoneBusy(false));
+  };
 
   const toggle = (next: boolean): void => {
     if (!IN_TAURI) {
@@ -3774,6 +3816,29 @@ function MeetingSection(): JSX.Element {
 
       {on ? (
         <div className="set__stack">
+          <div className="mic-picker">
+            <label className="set__sublabel" htmlFor="meeting-microphone">{t.meetingMicrophone}</label>
+            <select
+              id="meeting-microphone"
+              className="mic-picker__control"
+              value={microphone ?? ""}
+              disabled={microphoneBusy}
+              onFocus={loadMicrophones}
+              onChange={(event) => selectMicrophone(event.target.value)}
+            >
+              <option value="">{t.voiceMicrophoneDefault}</option>
+              {microphone && !microphones.some((device) => device.name === microphone) ? (
+                <option value={microphone}>{t.voiceMicrophoneDisconnected(microphone)}</option>
+              ) : null}
+              {microphones.map((device) => (
+                <option key={device.name} value={device.name} disabled={device.ambiguous}>
+                  {device.ambiguous ? `${device.name} — ${t.meetingMicrophoneAmbiguous}` : device.name}
+                </option>
+              ))}
+            </select>
+            <p className="set__hint set__hint--quiet">{t.meetingMicrophoneHint}</p>
+            {microphoneError ? <p className="set__hint is-err">{microphoneError}</p> : null}
+          </div>
           <label className="set__row">
             <input
               type="checkbox"
@@ -5526,6 +5591,7 @@ function SettingsSlot({
 }
 
 function Settings(props: {
+  initialSection: SettingsSectionId;
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
   showStatusInNotch: boolean;
@@ -5538,6 +5604,7 @@ function Settings(props: {
   onCleared: () => void;
 }): JSX.Element {
   const {
+    initialSection,
     appearance,
     setAppearance,
     showStatusInNotch,
@@ -5548,13 +5615,14 @@ function Settings(props: {
     onDone,
     onCleared,
   } = props;
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const settingsContentRef = useRef<HTMLElement>(null);
   const activeSectionMeta = SETTINGS_SECTIONS.find((section) => section.id === activeSection) ?? SETTINGS_SECTIONS[0];
   const selectSection = (section: SettingsSectionId): void => {
     setActiveSection(section);
     settingsContentRef.current?.scrollTo({ top: 0, behavior: "auto" });
   };
+  useEffect(() => setActiveSection(initialSection), [initialSection]);
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);

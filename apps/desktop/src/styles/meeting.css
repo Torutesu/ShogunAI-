@@ -375,6 +375,10 @@
 .ov--live-pill .ov__bar-wrap {
   pointer-events: auto;
 }
+/* More is a separate floating card, not an extension of the control pill. */
+.ov--live-pill.is-more-open {
+  padding-top: 8px;
+}
 /* Wrap = black pill only in flow. Grip is absolute — cannot push icons. */
 .ov__bar-wrap {
   position: relative;
@@ -382,6 +386,23 @@
   flex: 0 0 auto;
   width: max-content;
   z-index: 6;
+}
+.ov__audio-error {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  width: min(320px, 88vw);
+  margin: 0;
+  padding: 8px 10px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 99, 99, 0.45);
+  border-radius: 8px;
+  background: rgba(48, 16, 16, 0.96);
+  color: #ffd4d4;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
 }
 /* Dead-center on top edge; mostly above so it does not cover More/CC. */
 .ov__bar-wrap > .ov__bar-move {
@@ -565,7 +586,7 @@
   opacity: 1;
   visibility: visible;
 }
-.ov__bar-slot--more:has(.ov__modemenu) > .ov__bar-tip {
+.ov__bar-slot--more:has(.ov__bar-btn[aria-expanded="true"]) > .ov__bar-tip {
   opacity: 0;
   visibility: hidden;
 }
@@ -750,6 +771,205 @@
   padding: 8px 10px 4px;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
+.ov__moremenu {
+  /* Fixed to the transparent host, rather than the More button. This keeps a
+     deliberate gap between two independent surfaces. */
+  position: fixed;
+  left: 50%;
+  bottom: 84px;
+  z-index: 30;
+  width: 320px;
+  box-sizing: border-box;
+  max-height: calc(100% - 100px);
+  padding: 8px 0;
+  overflow-y: auto;
+  transform: translateX(-50%);
+  color: #fff;
+  background: rgba(6, 6, 8, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  box-shadow: none;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  backdrop-filter: blur(40px) saturate(1.45);
+  -webkit-backdrop-filter: blur(40px) saturate(1.45);
+}
+.ov__more-stealth,
+.ov__more-opacity,
+.ov__more-row {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 14px;
+}
+.ov__more-stealth {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ov__more-icon {
+  flex: none;
+  color: rgba(255, 255, 255, 0.8);
+}
+.ov__more-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  flex: 1;
+}
+.ov__more-copy strong,
+.ov__more-label,
+.ov__more-row span,
+.ov__more-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.ov__more-copy span {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov__more-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+}
+.ov__more-switch span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 140ms ease;
+}
+.ov__more-switch.is-on { background: #fff; }
+.ov__more-switch.is-on span { transform: translateX(14px); background: #171719; }
+.ov__more-opacity {
+  display: grid;
+  gap: 6px;
+}
+.ov__more-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ov__more-label strong {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ov__more-opacity input {
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.ov__more-opacity input::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, rgba(255, 255, 255, 0.92) 0 var(--ov-opacity), rgba(255, 255, 255, 0.2) var(--ov-opacity) 100%);
+}
+.ov__more-opacity input::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 2px solid rgba(6, 6, 8, 0.9);
+  border-radius: 50%;
+  background: #fff;
+}
+.ov__more-rule {
+  height: 1px;
+  margin: 3px 0;
+  background: rgba(255, 255, 255, 0.1);
+}
+.ov__more-row,
+.ov__more-back {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  color: rgba(255, 255, 255, 0.94);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.ov__more-row:hover,
+.ov__more-back:hover { background: rgba(255, 255, 255, 0.08); }
+.ov__more-row--status {
+  color: rgba(255, 255, 255, 0.72);
+  cursor: default;
+}
+.ov__more-row--status:hover { background: transparent; }
+.ov__more-row em {
+  overflow: hidden;
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov__more-row b {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+}
+.ov__more-picker {
+  margin: 0 10px 5px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ov__more-picker-row {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.78);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.ov__more-picker-row:hover:not(:disabled),
+.ov__more-picker-row.is-on { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.ov__more-picker-row:disabled { cursor: default; opacity: 0.46; }
+.ov__more-picker-error { margin: 5px 8px 3px; color: #f0a4a4; font-size: 11px; }
+.ov__more-back {
+  width: 100%;
+  padding: 7px 14px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+}
+.ov__more-title { padding: 6px 14px 8px; }
+.ov__more-modes { padding: 0 10px; }
+.ov__more-modes .ov__modeopt { height: 30px; }
+.ov__moremenu .ov__langrow--menu { margin: 8px 10px 2px; }
 .ov__livehead {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);

@@ -25,6 +25,7 @@ use crate::visual_recall_api::{is_structured_read, render_structured};
 use crate::voice_dictionary_api::{
     parse_term, render as render_voice_dictionary, VoiceDictionaryOperation,
 };
+use crate::meeting_microphone_api;
 
 /// The MCP protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -184,7 +185,9 @@ impl<B: MemoryBackend> McpServer<B> {
 
         let text = match tool_level(tool) {
             ApiLevel::Read => {
-                if tool == Tool::VoiceDictionaryList {
+                if tool == Tool::MeetingMicrophoneGet {
+                    meeting_microphone_api::get()
+                } else if tool == Tool::VoiceDictionaryList {
                     match self
                         .backend
                         .manage_voice_dictionary(VoiceDictionaryOperation::List)
@@ -234,6 +237,12 @@ impl<B: MemoryBackend> McpServer<B> {
                 }
             }
             ApiLevel::Write(_) => {
+                if tool == Tool::MeetingMicrophoneSet {
+                    match meeting_microphone_api::set(&args.to_string()) {
+                        Ok(value) => value,
+                        Err(error_message) => return error(id, -32602, &error_message),
+                    }
+                } else {
                 let operation = match tool {
                     Tool::VoiceDictionaryCreate => {
                         parse_term(&args.to_string()).map(VoiceDictionaryOperation::Create)
@@ -280,6 +289,7 @@ impl<B: MemoryBackend> McpServer<B> {
                         Ok(value) => render_voice_dictionary(value),
                         Err(_) => return error(id, -32602, "invalid voice dictionary request"),
                     }
+                }
                 }
             }
             ApiLevel::PerAction => {
@@ -405,6 +415,8 @@ fn tool_descriptor(tool: Tool) -> Value {
         Tool::VoiceDictionaryCreate => ("Create a local voice dictionary term (L1)", json!({ "canonical": { "type": "string" }, "aliases": { "type": "array", "items": { "type": "string" } }, "locale": { "type": "string" }, "scope": { "enum": ["global", "bundle", "surface"] }, "scope_ref": { "type": "string" }, "priority": { "type": "integer" }, "enabled": { "type": "boolean" } })),
         Tool::VoiceDictionaryUpdate => ("Replace one local voice dictionary term (L1)", json!({ "id": { "type": "integer" }, "canonical": { "type": "string" }, "aliases": { "type": "array", "items": { "type": "string" } }, "locale": { "type": "string" }, "scope": { "enum": ["global", "bundle", "surface"] }, "scope_ref": { "type": "string" }, "priority": { "type": "integer" }, "enabled": { "type": "boolean" } })),
         Tool::VoiceDictionaryDelete => ("Delete one local voice dictionary term (L1)", json!({ "id": { "type": "integer" } })),
+        Tool::MeetingMicrophoneGet => ("Get meeting microphone selection", json!({})),
+        Tool::MeetingMicrophoneSet => ("Set meeting microphone; null follows macOS default (L1)", json!({ "microphone": { "type": ["string", "null"] } })),
         Tool::DeviceOnboardingGet => ("This device's onboarding / first-run setup state", json!({})),
         Tool::StatePeopleGet
         | Tool::StateProjectsGet
