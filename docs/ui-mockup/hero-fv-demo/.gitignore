@@ -1,0 +1,5 @@
+# Patterns here are relative to this directory. They were previously written as
+# repo-root paths, which a nested .gitignore never matches.
+dock.png
+.dock.trimmed.png
+index.download.html
