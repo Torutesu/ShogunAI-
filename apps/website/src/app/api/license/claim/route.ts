@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { connectionMode } from '@/db';
 import { redeemClaimNonce } from '@/db/billing-queries';
 import { HttpError, fail, readJsonObject } from '@/lib/http';
 import { isValidClaimNonce, licenseKeyFingerprint } from '@/lib/license';
@@ -73,6 +74,8 @@ export async function POST(req: Request) {
     );
   } catch (e) {
     console.error('claim error:', e);
-    return fail('server_error');
+    // The transport, for the same reason as /api/license/verify: the only work above is a
+    // database read, so a throw names the database, and the token says which way it went out.
+    return fail('server_error', { reason: 'db_unavailable', via: connectionMode() });
   }
 }

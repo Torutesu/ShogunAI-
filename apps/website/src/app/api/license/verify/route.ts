@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { connectionMode } from '@/db';
 import {
   findLicenseByKey,
   findSubscription,
@@ -138,6 +139,13 @@ export async function POST(req: Request) {
     );
   } catch (e) {
     console.error('license verify error:', e);
-    return fail('server_error');
+    /**
+     * Name the transport on the way out. Every read above is a database read, so a throw here is a
+     * database failure, and which transport it took is the one fact that separates "Hyperdrive is
+     * down" from "this isolate never got the binding and fell back to the socket shim". The token
+     * is a fixed enum naming neither host nor credentials (see ConnectionMode), and the route
+     * already reports `signing_key_not_configured` the same way.
+     */
+    return fail('server_error', { reason: 'db_unavailable', via: connectionMode() });
   }
 }
