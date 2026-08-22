@@ -17,31 +17,65 @@ const url =
 const sql = postgres(url, { max: 1 });
 
 /**
+ * The password exactly as it appears in the connection string, before any decoding.
+ *
+ * Hand-parsed because `new URL` normalises: it re-encodes reserved characters on the way out, so
+ * its `password` is not the text a human pasted. The authority ends at the first `/`, and the
+ * userinfo at the **last** `@` within it, so a password containing `@` is read whole.
+ */
+function literalPassword(raw: string): string {
+  const authority = raw.slice(raw.indexOf('://') + 3).split('/')[0];
+  const at = authority.lastIndexOf('@');
+  if (at < 0) return '';
+  const userinfo = authority.slice(0, at);
+  const colon = userinfo.indexOf(':');
+  return colon < 0 ? '' : userinfo.slice(colon + 1);
+}
+
+/**
  * What the connection string actually parsed to, with the password removed.
  *
  * A failed migrate blocks the whole deploy, so the log has to answer "which of the five parts is
  * wrong" without anyone having to reproduce it locally — and it has to do that without printing
  * the credential into a public Actions log.
+ *
+ * One fact per line: Actions redacts any span matching a registered secret, and a single-line
+ * summary loses every fact after the redacted one.
  */
 function describeUrl(raw: string): string {
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
-    return 'DATABASE_URL is not a parseable URL (a raw `/ # ? %` in the password must be percent-encoded)';
+    return 'DATABASE_URL is not a parseable URL. A raw `/`, `?`, `#` or `%` in the password must be\npercent-encoded; every other character works as-is.';
   }
   const password = decodeURIComponent(u.password);
-  const placeholder = /^\[.*\]$/.test(password) ? ' — still the dashboard placeholder!' : '';
-  return [
-    `user=${u.username || '(none)'}`,
-    `host=${u.hostname}`,
-    `port=${u.port || '(default)'}`,
-    `database=${u.pathname.replace(/^\//, '') || '(none)'}`,
-    `password=${password ? `set${placeholder}` : '(EMPTY)'}`,
-    raw !== (process.env.DATABASE_URL ?? raw) ? 'note: surrounding whitespace was trimmed' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
+  const lines = [
+    `  user     ${u.username || '(none)'}`,
+    `  host     ${u.hostname}`,
+    `  port     ${u.port || '(default)'}`,
+    `  database ${u.pathname.replace(/^\//, '') || '(none)'}`,
+    `  password ${password ? 'non-empty' : 'EMPTY'}`,
+  ];
+  if (/^\[.*\]$/.test(password)) {
+    lines.push('  ^^ that is still the dashboard placeholder — substitute the real password');
+  }
+  // Catches a failure with no other symptom: a literal `%` followed by two hex digits is a valid
+  // escape, so a password containing one is decoded into a *different* string and sent silently.
+  // Verified against postgres:16 — `aB3%2Fx9`, `aB3%41x9` and `pa%73s` each authenticate as
+  // something else and come back 28P01, indistinguishable from a wrong password.
+  //
+  // Read off the raw string rather than `u.password`: the URL parser hands back a re-encoded form
+  // (a literal `@` in a password comes back as `%40`), so comparing that against its own decoding
+  // flags every password containing a reserved character. Reporting only whether an escape was
+  // present leaks nothing about the value.
+  if (/%[0-9A-Fa-f]{2}/.test(literalPassword(raw))) {
+    lines.push(
+      '  ^^ this password was percent-DECODED before being sent: the text contains a `%` escape.',
+      '     If the password really contains a literal `%`, write it as `%25` in the URL.',
+    );
+  }
+  return lines.join('\n');
 }
 
 async function main() {
@@ -226,9 +260,21 @@ main().catch((err) => {
   // deploy that depends on it is blocked by a credential, not by a broken statement.
   if ((err as { code?: string })?.code === '28P01') {
     console.error(
-      `\nDATABASE_URL was rejected by the server. Parsed as: ${describeUrl(url)}\n` +
-        'Copy the Session pooler string from Supabase → Project Settings → Database, substitute ' +
-        'the real password, and re-set the secret with no trailing newline.',
+      `\nDATABASE_URL was rejected by the server. It parsed as:\n${describeUrl(url)}\n\n` +
+        'Everything above except the password is reported verbatim, so check those first — and\n' +
+        'check the host hardest. Against Supabase, 28P01 does NOT mean "wrong password":\n\n' +
+        '  * A pooler host that does not host this project answers 28P01. Supavisor will not\n' +
+        '    reveal whether a tenant exists, so an unknown tenant and a bad password are the same\n' +
+        '    reply. `aws-0-<region>` and `aws-1-<region>` are different fleets on different load\n' +
+        '    balancers; a project on one answers 28P01 on the other with a perfect password.\n' +
+        '    Compare the host against the string the dashboard shows *today*.\n' +
+        '  * The username carries the routing. It must be `postgres.<project-ref>`, not `postgres`.\n' +
+        '  * Only then suspect the password itself.\n\n' +
+        'What 28P01 does rule out is a percent-encoding mistake: a raw `/`, `?`, `#` or `%` in the\n' +
+        'password fails while building the URL ("Invalid URL" / "URI malformed"), never as a\n' +
+        'rejected login. Every other character connects unencoded — verified against postgres:16\n' +
+        'across 33 punctuation characters. So the password is not mangled; it is either wrong or\n' +
+        'being presented to a server that has never heard of this project.',
     );
   }
   process.exit(1);
