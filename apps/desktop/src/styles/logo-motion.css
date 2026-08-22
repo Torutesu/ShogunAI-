@@ -1,0 +1,297 @@
+/* Motion for the ShogunAI mark.
+ *
+ * The mark is a folded-paper kabuto: six flat facets around a vertical axis. The only honest way
+ * to animate it is to fold it — each facet turns about the crease it actually shares with its
+ * neighbour, so the mark assembles itself out of a single sheet instead of fading or spinning in.
+ *
+ * A facet turning about its crease, projected flat, is a scale perpendicular to that crease. The
+ * peak's crease is the vertical centre line, so it is a plain scaleX. The wing and the blade hinge
+ * on diagonals, so the scale is taken in a rotated frame — rotate(-a) scaleX(k) rotate(a) scales
+ * along the direction a about the same origin, and putting that origin anywhere on the crease
+ * pins the crease in place.
+ *
+ * Creases, measured off the facet paths in Logo.tsx (native 957x614 space, left half):
+ *
+ *   peak   M296 254 L469 0 L469 525 Z     crease x=469 (the centre line)      → bbox right edge
+ *   wing   M0 101 L276 264 L446 524 ...   crease (276,264)-(446,524), 56.82°  → normal -33.18°
+ *   blade  M62 613 L171 413 L331 493 Z    crease (171,413)-(331,493), 26.57°  → normal -63.43°
+ *
+ * Origins are `transform-box: fill-box` percentages of each facet's own bounding box, which is
+ * what lets the right half reuse the same three rules: it is the left half under a mirror, and a
+ * fill-box origin mirrors with it. It also makes the rules independent of however a call site has
+ * transformed the mark on the way in.
+ *
+ * Only `transform` and `fill-opacity` are animated — both composited, neither reflows.
+ */
+
+/* ── the mark, at rest ───────────────────────────────────────────────────── */
+
+.shogun-mark {
+  /* Facets overshoot their creases by 4% mid-fold; the wings would clip on the viewBox edge. */
+  overflow: visible;
+}
+
+.shogun-mark__facet {
+  transform-box: fill-box;
+}
+
+.shogun-mark__facet--peak {
+  transform-origin: 100% 50%;
+}
+
+.shogun-mark__facet--wing {
+  transform-origin: 80.94% 69.27%;
+}
+
+.shogun-mark__facet--blade {
+  transform-origin: 70.26% 20%;
+}
+
+/* ── unfold: the mark folds itself out of the sheet, once ─────────────────── */
+
+/* Fold order is centre → wing → blade, the order the paper would actually take, and each facet
+ * carries a little past its crease before settling (55% → 78% → 100%) so the fold reads as taut
+ * paper rather than a tween. `backwards` holds the collapsed state through the stagger delay;
+ * deliberately not `forwards`, so the facets return to their untransformed rest state at the end
+ * and the hover fold below can take over the same property. */
+.shogun-mark--unfold {
+  animation: shogun-mark-in 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.shogun-mark--unfold .shogun-mark__facet {
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: backwards;
+  will-change: transform;
+}
+
+.shogun-mark--unfold .shogun-mark__facet--peak {
+  animation-name: shogun-unfold-peak;
+  animation-duration: 480ms;
+}
+
+.shogun-mark--unfold .shogun-mark__facet--wing {
+  animation-name: shogun-unfold-wing;
+  animation-duration: 540ms;
+  animation-delay: 110ms;
+}
+
+.shogun-mark--unfold .shogun-mark__facet--blade {
+  animation-name: shogun-unfold-blade;
+  animation-duration: 440ms;
+  animation-delay: 280ms;
+}
+
+@keyframes shogun-mark-in {
+  0% {
+    opacity: 0;
+    transform: translateY(7px) scale(0.9);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A facet turned edge-on shows almost none of itself, so each one fades up as it turns flat to
+ * the viewer — the light catching the fold, not a separate opacity effect. */
+@keyframes shogun-unfold-peak {
+  0% {
+    transform: scaleX(0.04);
+    fill-opacity: 0.3;
+  }
+  55% {
+    transform: scaleX(1.04);
+    fill-opacity: 1;
+  }
+  78% {
+    transform: scaleX(0.99);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes shogun-unfold-wing {
+  0% {
+    transform: rotate(-33.18deg) scaleX(0.04) rotate(33.18deg);
+    fill-opacity: 0.24;
+  }
+  55% {
+    transform: rotate(-33.18deg) scaleX(1.04) rotate(33.18deg);
+    fill-opacity: 1;
+  }
+  78% {
+    transform: rotate(-33.18deg) scaleX(0.99) rotate(33.18deg);
+  }
+  100% {
+    transform: rotate(-33.18deg) scaleX(1) rotate(33.18deg);
+  }
+}
+
+@keyframes shogun-unfold-blade {
+  0% {
+    transform: rotate(-63.43deg) scaleX(0.04) rotate(63.43deg);
+    fill-opacity: 0.2;
+  }
+  55% {
+    transform: rotate(-63.43deg) scaleX(1.06) rotate(63.43deg);
+    fill-opacity: 1;
+  }
+  78% {
+    transform: rotate(-63.43deg) scaleX(0.985) rotate(63.43deg);
+  }
+  100% {
+    transform: rotate(-63.43deg) scaleX(1) rotate(63.43deg);
+  }
+}
+
+/* ── idle: the mark breathing, for "running, nothing to report" ───────────── */
+
+/* Deliberately near the threshold of noticing: the creases give by 2-6% over five seconds. This
+ * one loops forever, so it is opt-in per call site — an always-on animation anywhere the app is
+ * idle is CPU the capture daemon needs. */
+.shogun-mark--idle .shogun-mark__facet--wing {
+  animation: shogun-breathe-wing 5s ease-in-out infinite;
+}
+
+.shogun-mark--idle .shogun-mark__facet--blade {
+  animation: shogun-breathe-blade 5s ease-in-out 260ms infinite;
+}
+
+@keyframes shogun-breathe-wing {
+  0%,
+  100% {
+    transform: rotate(-33.18deg) scaleX(1) rotate(33.18deg);
+  }
+  50% {
+    transform: rotate(-33.18deg) scaleX(0.972) rotate(33.18deg);
+  }
+}
+
+@keyframes shogun-breathe-blade {
+  0%,
+  100% {
+    transform: rotate(-63.43deg) scaleX(1) rotate(63.43deg);
+  }
+  50% {
+    transform: rotate(-63.43deg) scaleX(0.94) rotate(63.43deg);
+  }
+}
+
+/* ── thinking: a crease travelling outward, for "working on it" ───────────── */
+
+/* One dip per facet, the stagger carried by animation-delay so the crease reads as a single wave
+ * moving centre → edge on a 1.6s cycle. Same standing cost as idle: opt-in only. */
+.shogun-mark--thinking .shogun-mark__facet {
+  animation-duration: 1.6s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+.shogun-mark--thinking .shogun-mark__facet--peak {
+  animation-name: shogun-think-peak;
+}
+
+.shogun-mark--thinking .shogun-mark__facet--wing {
+  animation-name: shogun-think-wing;
+  animation-delay: 130ms;
+}
+
+.shogun-mark--thinking .shogun-mark__facet--blade {
+  animation-name: shogun-think-blade;
+  animation-delay: 260ms;
+}
+
+@keyframes shogun-think-peak {
+  0%,
+  46%,
+  100% {
+    transform: scaleX(1);
+    fill-opacity: 1;
+  }
+  20% {
+    transform: scaleX(0.82);
+    fill-opacity: 0.62;
+  }
+}
+
+@keyframes shogun-think-wing {
+  0%,
+  46%,
+  100% {
+    transform: rotate(-33.18deg) scaleX(1) rotate(33.18deg);
+    fill-opacity: 1;
+  }
+  20% {
+    transform: rotate(-33.18deg) scaleX(0.8) rotate(33.18deg);
+    fill-opacity: 0.62;
+  }
+}
+
+@keyframes shogun-think-blade {
+  0%,
+  46%,
+  100% {
+    transform: rotate(-63.43deg) scaleX(1) rotate(63.43deg);
+    fill-opacity: 1;
+  }
+  20% {
+    transform: rotate(-63.43deg) scaleX(0.74) rotate(63.43deg);
+    fill-opacity: 0.62;
+  }
+}
+
+/* ── hover: the sheet gives under the pointer ─────────────────────────────── */
+
+/* A transition rather than an animation, so it composes with `unfold` once that has finished and
+ * released the property. It has no effect under `idle` / `thinking`, whose animations hold the
+ * transform for as long as they run. */
+.shogun-mark--interactive .shogun-mark__facet {
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.shogun-mark--interactive:hover .shogun-mark__facet--wing {
+  transform: rotate(-33.18deg) scaleX(0.93) rotate(33.18deg);
+}
+
+.shogun-mark--interactive:hover .shogun-mark__facet--blade {
+  transform: rotate(-63.43deg) scaleX(0.86) rotate(63.43deg);
+}
+
+/* ── reduced motion ──────────────────────────────────────────────────────── */
+
+/* The mark still has to arrive, so `unfold` keeps its fade and drops the fold; everything that
+ * loops or reacts to the pointer stops entirely, at the assembled mark. */
+@media (prefers-reduced-motion: reduce) {
+  .shogun-mark--unfold {
+    animation: shogun-mark-fade 240ms linear both;
+  }
+
+  .shogun-mark--unfold .shogun-mark__facet,
+  .shogun-mark--idle .shogun-mark__facet,
+  .shogun-mark--thinking .shogun-mark__facet {
+    animation: none;
+    will-change: auto;
+  }
+
+  .shogun-mark--interactive .shogun-mark__facet {
+    transition: none;
+  }
+
+  .shogun-mark--interactive:hover .shogun-mark__facet--wing,
+  .shogun-mark--interactive:hover .shogun-mark__facet--blade {
+    transform: none;
+  }
+
+  @keyframes shogun-mark-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

@@ -397,6 +397,12 @@
   gap: 16px;
 }
 
+/* The mark leads the welcome step. `.obs` already spaces its children by 16px; the negative
+ * bottom margin pulls the title back to the 8px that reads as one unit with the mark. */
+.ob-welcome-mark {
+  margin-bottom: -8px;
+}
+
 .ob-points {
   list-style: none;
   display: flex;
