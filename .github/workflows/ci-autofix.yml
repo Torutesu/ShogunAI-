@@ -1,0 +1,142 @@
+name: ci-autofix
+
+# Issue #191: when `ci` fails, classify the log and either (a) open a DRAFT PR with a
+# mechanical rustfmt/clippy --fix, or (b) comment on the failing same-repo PR.
+# Never merges. Never pushes to a fork. Never runs an LLM. See
+# docs/specs/issue-191-autofix-prs.md.
+
+on:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Failed `ci` run id to classify
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: ci-autofix-${{ github.event.workflow_run.head_sha || github.event.inputs.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: classify + maybe draft PR
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch failed run log
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RUN_ID="${{ github.event.inputs.run_id }}"
+          else
+            RUN_ID="${{ github.event.workflow_run.id }}"
+          fi
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          gh run view "$RUN_ID" --log > /tmp/ci-raw.log || true
+          tail -c 400000 /tmp/ci-raw.log > /tmp/ci.log
+
+      - name: Classify
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SHA="$(gh run view "$RUN_ID" --json headSha --jq .headSha)"
+            HEAD_REPO="$(gh run view "$RUN_ID" --json headRepository --jq .headRepository.owner.login)/$(gh run view "$RUN_ID" --json headRepository --jq .headRepository.name)"
+          else
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            HEAD_REPO="${{ github.event.workflow_run.head_repository.full_name }}"
+          fi
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          echo "HEAD_REPO=$HEAD_REPO" >> "$GITHUB_ENV"
+          python3 scripts/ci_autofix.py classify --log-file /tmp/ci.log --sha "$SHA" > /tmp/plan.json
+          python3 - <<'PY'
+          import json, os
+          p = json.load(open("/tmp/plan.json"))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"class={p['class']}\n")
+              fh.write(f"comment_only={str(p['comment_only']).lower()}\n")
+              fh.write(f"fingerprint={p['fingerprint']}\n")
+          PY
+          echo "plan class=$(python3 -c 'import json; print(json.load(open("/tmp/plan.json"))["class"])')"
+
+      - name: Comment on same-repo PR when there is no mechanical fix
+        if: steps.plan.outputs.comment_only == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SAME="${{ github.repository }}"
+          if [ "${HEAD_REPO}" != "$SAME" ]; then
+            echo "fork head — skip comment"
+            exit 0
+          fi
+          PR="${{ github.event.workflow_run.pull_requests[0].number }}"
+          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+            PR="$(gh pr list --search "$SHA" --state open --json number --jq '.[0].number' || true)"
+          fi
+          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+            echo "no open PR for $SHA — skip (no issue spam)"
+            exit 0
+          fi
+          THREAD="$(gh pr view "$PR" --json body --jq .body)"
+          THREAD="$THREAD$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --jq '.[].body' 2>/dev/null || true)"
+          if echo "$THREAD" | grep -q "${{ steps.plan.outputs.fingerprint }}"; then
+            echo "fingerprint already present on #$PR"
+            exit 0
+          fi
+          python3 -c 'import json; print(json.load(open("/tmp/plan.json"))["body"])' > /tmp/pr-body.md
+          gh pr comment "$PR" --body-file /tmp/pr-body.md
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.plan.outputs.comment_only == 'false'
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply mechanical fix and open DRAFT PR
+        if: steps.plan.outputs.comment_only == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SAME="${{ github.repository }}"
+          if [ "${HEAD_REPO}" != "$SAME" ]; then
+            echo "fork head — mechanical apply skipped"
+            exit 0
+          fi
+          git fetch origin "$SHA" || git fetch origin
+          git checkout "$SHA"
+          BRANCH="autofix/${{ steps.plan.outputs.class }}-${{ steps.plan.outputs.fingerprint }}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "branch $BRANCH already exists — skip"
+            exit 0
+          fi
+          git checkout -b "$BRANCH"
+          python3 -c 'import json; print("\n".join(json.load(open("/tmp/plan.json"))["apply"]))' | bash -eux
+          if git diff --quiet; then
+            echo "mechanical apply produced no diff"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(ci): mechanical ${{ steps.plan.outputs.class }} from failed run"
+          git push origin "$BRANCH"
+          python3 -c 'import json; print(json.load(open("/tmp/plan.json"))["body"])' > /tmp/pr-body.md
+          TITLE="$(python3 -c 'import json; print(json.load(open("/tmp/plan.json"))["title"])')"
+          gh pr create --draft --title "$TITLE" --body-file /tmp/pr-body.md --base main --head "$BRANCH"

@@ -104,6 +104,7 @@ jobs:
           python3 scripts/check-migrations.py
           python3 scripts/check-batch-source-filter.py --self-test
           python3 scripts/check-batch-source-filter.py
+          python3 scripts/ci_autofix.py --self-test
       - name: release build (SLO code path)
         run: cargo build -p spike-harness --release
       # WP2.6 requires the p95 search bench to run on Linux CI. `cargo test --workspace` above
