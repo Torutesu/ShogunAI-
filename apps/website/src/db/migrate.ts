@@ -230,14 +230,20 @@ main().catch((err) => {
   if ((err as { code?: string })?.code === '28P01') {
     console.error(
       `\nDATABASE_URL was rejected by the server. It parsed as:\n${describeUrl(url)}\n\n` +
-        'Everything above except the password is reported verbatim, so check those first.\n' +
-        'Note that 28P01 rules out a percent-encoding mistake: a raw `/`, `?`, `#` or `%` in the\n' +
+        'Everything above except the password is reported verbatim, so check those first — and\n' +
+        'check the host hardest. Against Supabase, 28P01 does NOT mean "wrong password":\n\n' +
+        '  * A pooler host that does not host this project answers 28P01. Supavisor will not\n' +
+        '    reveal whether a tenant exists, so an unknown tenant and a bad password are the same\n' +
+        '    reply. `aws-0-<region>` and `aws-1-<region>` are different fleets on different load\n' +
+        '    balancers; a project on one answers 28P01 on the other with a perfect password.\n' +
+        '    Compare the host against the string the dashboard shows *today*.\n' +
+        '  * The username carries the routing. It must be `postgres.<project-ref>`, not `postgres`.\n' +
+        '  * Only then suspect the password itself.\n\n' +
+        'What 28P01 does rule out is a percent-encoding mistake: a raw `/`, `?`, `#` or `%` in the\n' +
         'password fails while building the URL ("Invalid URL" / "URI malformed"), never as a\n' +
         'rejected login. Every other character connects unencoded — verified against postgres:16\n' +
-        'across 33 punctuation characters. So a 28P01 means the password value itself is wrong.\n' +
-        'Re-copy the Session pooler string from Supabase → Project Settings → Database. The new\n' +
-        'password is shown only at the moment you reset it, so reset and copy in one pass rather\n' +
-        'than pairing a fresh password with a connection string copied beforehand.',
+        'across 33 punctuation characters. So the password is not mangled; it is either wrong or\n' +
+        'being presented to a server that has never heard of this project.',
     );
   }
   process.exit(1);
