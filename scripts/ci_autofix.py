@@ -7,6 +7,7 @@ No LLM. No auto-merge. Run from repo root:
     python3 scripts/ci_autofix.py --self-test
     python3 scripts/ci_autofix.py redact --log-file /tmp/ci.log
     python3 scripts/ci_autofix.py classify --log-file /tmp/ci.log --sha abc1234
+    python3 scripts/ci_autofix.py diff-guard
 """
 
 from __future__ import annotations
@@ -61,13 +62,12 @@ SCRIPT_FAIL = re.compile(
     r"violation|exit code [1-9]|Traceback|AssertionError|Process completed with exit code",
     re.I,
 )
-HARNESS_HINT = re.compile(
-    r"spike-harness|slo-0[12]|notch.*(?:expand|p95)|context cache|idle cpu",
-    re.I,
-)
+HARNESS_HINT = re.compile(r"spike-harness|slo-0[12]", re.I)
 FRONTEND_HINT = re.compile(r"@shogun-ai/desktop|eslint|vitest|typecheck", re.I)
 API_HINT = re.compile(r"@shogun-ai/api|batch relay", re.I)
-MACOS_HINT = re.compile(r"shogun-desktop-spike|macos-14|macos shell", re.I)
+# Package name only. `macos-14` appears in every macOS job header and must not
+# classify a Linux test failure as macos when the full log is the fallback.
+MACOS_HINT = re.compile(r"shogun-desktop-spike", re.I)
 
 
 def redact(text: str) -> str:
@@ -109,9 +109,7 @@ def classify(log: str) -> str:
         return "rustfmt"
     if CLIPPY_DIAG.search(log):
         return "clippy"
-    if HARNESS_HINT.search(log) and (
-        TEST_FAIL.search(log) or "error" in log.lower() or "FAILED" in log
-    ):
+    if HARNESS_HINT.search(log) and TEST_FAIL.search(log):
         return "harness"
     if MACOS_HINT.search(log) and "error" in log.lower():
         return "macos"
@@ -137,14 +135,19 @@ def apply_commands(klass: str) -> list[str]:
     return []
 
 
+def rust_only_paths(names: list[str]) -> bool:
+    """Mechanical apply may only touch tracked Rust sources — never workflows or lockfiles."""
+    return bool(names) and all(name.endswith(".rs") for name in names)
+
+
 def fingerprint(klass: str, sha: str) -> str:
     raw = f"{klass}:{sha}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def plan(log: str, sha: str) -> dict:
-    redacted = redact(log)
-    klass = classify(redacted)
+def plan(log: str, sha: str, forced_class: str | None = None) -> dict:
+    redacted = redact(log) if log else ""
+    klass = forced_class or classify(redacted)
     cmds = apply_commands(klass)
     excerpt_ok = klass not in {"leak"}
     excerpt = ""
@@ -217,6 +220,11 @@ def self_test() -> None:
     assert apply_commands("rustfmt") == ["cargo fmt --all"]
     # Command-name only: not a rustfmt failure.
     assert classify(redact("cargo fmt --all\nerror: test failed\n")) == "rust_test"
+    assert classify(redact("macos-14\nerror: test failed\n")) == "rust_test"
+    assert classify(redact("context cache updated\nidle cpu\nerror: test failed\n")) == "rust_test"
+    assert rust_only_paths(["crates/shogun-core/src/lib.rs"])
+    assert not rust_only_paths(["crates/shogun-core/src/lib.rs", ".github/workflows/pwn.yml"])
+    assert not rust_only_paths([])
 
     clippy_log = "error: this lint: clippy::unwrap_used\n --> crates/shogun-core/src/daemon.rs\n"
     assert classify(redact(clippy_log)) == "clippy"
@@ -252,7 +260,29 @@ def self_test() -> None:
     assert p["title"].startswith("DO NOT MERGE:")
     assert p["fingerprint"] == fingerprint("rustfmt", "abc1234deadbeef")
     assert "ghp_" not in p["body"]
+    forced = plan("", "abc1234deadbeef", forced_class="clippy")
+    assert forced["class"] == "clippy"
+    assert forced["apply"]
+    assert apply_commands("clippy") == forced["apply"]
     print("ci_autofix self-test OK")
+
+
+def diff_guard() -> int:
+    import subprocess
+
+    names = [
+        n
+        for n in subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines()
+        if n.strip()
+    ]
+    if not names:
+        sys.stderr.write("mechanical apply produced no diff\n")
+        return 2
+    if not rust_only_paths(names):
+        sys.stderr.write("refusing non-Rust paths: " + " ".join(names) + "\n")
+        return 1
+    sys.stdout.write("\n".join(names) + "\n")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -260,19 +290,42 @@ def main(argv: list[str]) -> int:
         self_test()
         return 0
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["redact", "classify"])
-    parser.add_argument("--log-file", required=True)
+    parser.add_argument("command", choices=["redact", "classify", "diff-guard", "apply-commands"])
+    parser.add_argument("--log-file")
     parser.add_argument("--sha", default="unknown")
+    parser.add_argument("--class", dest="klass")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv[1:])
     if args.self_test:
         self_test()
         return 0
+    if args.command == "diff-guard":
+        return diff_guard()
+    if args.command == "apply-commands":
+        if args.klass not in {"rustfmt", "clippy"}:
+            parser.error("apply-commands requires --class rustfmt|clippy")
+        sys.stdout.write("\n".join(apply_commands(args.klass)) + "\n")
+        return 0
+    if not args.log_file:
+        parser.error("--log-file is required")
     log = open(args.log_file, encoding="utf-8", errors="replace").read()
     if args.command == "redact":
         sys.stdout.write(redact(log))
         return 0
-    json.dump(plan(log, args.sha), sys.stdout, indent=2)
+    if args.klass and args.klass not in {
+        "rustfmt",
+        "clippy",
+        "invariant_guard",
+        "leak",
+        "rust_test",
+        "frontend",
+        "api",
+        "macos",
+        "harness",
+        "unknown",
+    }:
+        parser.error(f"unknown class {args.klass!r}")
+    json.dump(plan(log, args.sha, forced_class=args.klass), sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
 

@@ -2,8 +2,9 @@ name: ci-autofix
 
 # Issue #191: when `ci` fails, classify the log and either (a) open a DRAFT PR with a
 # mechanical rustfmt/clippy --fix, or (b) comment on the failing PR.
-# Never merges. Never pushes to a fork. Never runs an LLM. See
-# docs/specs/issue-191-autofix-prs.md.
+# Never merges. Never pushes to a fork. Never runs an LLM.
+# Write credentials never sit in the same job as cargo (untrusted build.rs).
+# See docs/specs/issue-191-autofix-prs.md.
 
 on:
   workflow_run:
@@ -16,9 +17,9 @@ on:
         required: true
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
   actions: read
+  pull-requests: read
 
 concurrency:
   group: ci-autofix-${{ github.event.workflow_run.head_sha || github.event.inputs.run_id }}
@@ -26,14 +27,22 @@ concurrency:
 
 jobs:
   classify:
-    name: classify + maybe draft PR
+    name: classify
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
+    outputs:
+      class: ${{ steps.plan.outputs.class }}
+      comment_only: ${{ steps.plan.outputs.comment_only }}
+      fingerprint: ${{ steps.plan.outputs.fingerprint }}
+      same_repo: ${{ steps.plan.outputs.same_repo }}
+      label: ${{ steps.plan.outputs.label }}
+      sha: ${{ steps.plan.outputs.sha }}
+      head_branch: ${{ steps.plan.outputs.head_branch }}
+      run_id: ${{ steps.plan.outputs.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Fetch failed run log
@@ -46,7 +55,6 @@ jobs:
           EVENT_BRANCH: ${{ github.event.workflow_run.head_branch }}
           EVENT_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
           EVENT_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          EVENT_WORKFLOW: ${{ github.event.workflow_run.name }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -89,7 +97,7 @@ jobs:
           PY
           else
             python3 - <<'PY'
-          import os, re, sys
+          import os, re
           conclusion = os.environ.get("EVENT_CONCLUSION") or ""
           if conclusion != "failure":
               raise SystemExit(f"refusing conclusion {conclusion!r}")
@@ -109,8 +117,6 @@ jobs:
               fh.write(f"HEAD_REPO={head_repo}\n")
           PY
           fi
-          # Failed-job logs only, so a successful rust job cannot classify the run.
-          # Redact the complete raw log before any GitHub write.
           if ! gh run view "$RUN_ID" --log-failed > /tmp/ci-raw.log 2>/dev/null || [ ! -s /tmp/ci-raw.log ]; then
             gh run view "$RUN_ID" --log > /tmp/ci-raw.log || true
           fi
@@ -128,6 +134,8 @@ jobs:
           p = json.load(open("/tmp/plan.json"))
           klass = p["class"]
           fp = p["fingerprint"]
+          sha = os.environ["SHA"]
+          branch = os.environ["HEAD_BRANCH"]
           if not re.fullmatch(r"[a-z_]+", klass):
               raise SystemExit(f"invalid class {klass!r}")
           if not re.fullmatch(r"[0-9a-f]{16}", fp):
@@ -139,19 +147,37 @@ jobs:
               fh.write(f"fingerprint={fp}\n")
               fh.write(f"same_repo={str(same).lower()}\n")
               fh.write(f"label={p.get('label') or 'ci-autofix'}\n")
+              fh.write(f"sha={sha}\n")
+              fh.write(f"head_branch={branch}\n")
+              fh.write(f"run_id={os.environ['RUN_ID']}\n")
           print(f"plan class={klass} same_repo={same}")
           PY
 
+  apply:
+    name: apply without write token
+    needs: classify
+    if: needs.classify.outputs.comment_only == 'false' && needs.classify.outputs.same_repo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      has_diff: ${{ steps.diff.outputs.has_diff }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.plan.outputs.comment_only == 'false' && steps.plan.outputs.same_repo == 'true'
         with:
           components: rustfmt, clippy
 
       - name: Fetch failed SHA
-        if: steps.plan.outputs.comment_only == 'false' && steps.plan.outputs.same_repo == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          SHA: ${{ needs.classify.outputs.sha }}
         run: |
           set -euo pipefail
           if ! [[ "$SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
@@ -160,50 +186,102 @@ jobs:
           fi
           git fetch "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$SHA"
 
-      - name: Apply mechanical fix without credentials
-        id: apply
-        if: steps.plan.outputs.comment_only == 'false' && steps.plan.outputs.same_repo == 'true'
+      - name: Apply mechanical fix
         env:
-          CLASS: ${{ steps.plan.outputs.class }}
-          FINGERPRINT: ${{ steps.plan.outputs.fingerprint }}
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          CLASS: ${{ needs.classify.outputs.class }}
+          SHA: ${{ needs.classify.outputs.sha }}
         run: |
           set -euo pipefail
           if ! [[ "$CLASS" =~ ^(rustfmt|clippy)$ ]]; then
             echo "refusing apply for class $CLASS"
             exit 1
           fi
+          # Keep the default-branch script; checkout of $SHA replaces the tree.
+          cp scripts/ci_autofix.py /tmp/ci_autofix.py
+          python3 /tmp/ci_autofix.py apply-commands --class "$CLASS" > /tmp/apply.sh
+          git checkout --detach "$SHA"
+          # clippy --fix -- -D warnings exits 1 when unfixable lints remain.
+          # Keep any applied .rs diff; publish/comment decide from diff-guard.
+          bash -eux /tmp/apply.sh || true
+
+      - name: Guard Rust-only diff
+        id: diff
+        run: |
+          set -euo pipefail
+          set +e
+          python3 /tmp/ci_autofix.py diff-guard
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "has_diff=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "has_diff=false" >> "$GITHUB_OUTPUT"
+            echo "non-Rust paths from apply — refuse to publish"
+            exit 0
+          fi
+          git diff -- '*.rs' > /tmp/ci-autofix.patch
+          echo "has_diff=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.diff.outputs.has_diff == 'true'
+        with:
+          name: ci-autofix-patch
+          path: /tmp/ci-autofix.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: open draft PR
+    needs: [classify, apply]
+    if: needs.apply.outputs.has_diff == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-autofix-patch
+          path: /tmp
+
+      - name: Commit patch and open DRAFT PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.classify.outputs.sha }}
+          CLASS: ${{ needs.classify.outputs.class }}
+          FINGERPRINT: ${{ needs.classify.outputs.fingerprint }}
+          HEAD_BRANCH: ${{ needs.classify.outputs.head_branch }}
+          LABEL: ${{ needs.classify.outputs.label }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "invalid sha"
+            exit 1
+          fi
+          if ! [[ "$CLASS" =~ ^(rustfmt|clippy)$ ]]; then
+            echo "invalid class"
+            exit 1
+          fi
           if ! [[ "$FINGERPRINT" =~ ^[0-9a-f]{16}$ ]]; then
             echo "invalid fingerprint"
             exit 1
           fi
-          BRANCH="autofix/${CLASS}-${FINGERPRINT}"
-          echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          git checkout --detach "$SHA"
-          git checkout -B "$BRANCH"
-          python3 -c 'import json; print("\n".join(json.load(open("/tmp/plan.json"))["apply"]))' | bash -eux
-          if git diff --quiet; then
-            echo "mechanical apply produced no diff"
-            echo "has_diff=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "has_diff=true" >> "$GITHUB_OUTPUT"
-
-      - name: Open DRAFT PR
-        if: steps.apply.outputs.has_diff == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CLASS: ${{ steps.plan.outputs.class }}
-          FINGERPRINT: ${{ steps.plan.outputs.fingerprint }}
-          LABEL: ${{ steps.plan.outputs.label }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          BRANCH="${BRANCH:-autofix/${CLASS}-${FINGERPRINT}}"
           if ! [[ "$HEAD_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
             echo "invalid head branch"
             exit 1
           fi
+          BRANCH="autofix/${CLASS}-${FINGERPRINT}"
           EXISTING="$(gh pr list --search "label:${LABEL} ${FINGERPRINT}" --state open --json number --jq '.[0].number' || true)"
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
             echo "open draft #$EXISTING already carries fingerprint"
@@ -214,39 +292,78 @@ jobs:
             echo "open PR #$HEAD_PR already uses $BRANCH"
             exit 0
           fi
+          cp scripts/ci_autofix.py /tmp/ci_autofix.py
+          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$SHA"
+          git checkout --detach "$SHA"
+          git checkout -B "$BRANCH"
+          git apply --check /tmp/ci-autofix.patch
+          git apply /tmp/ci-autofix.patch
+          python3 /tmp/ci_autofix.py diff-guard
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.rs'
+          git commit -m "fix(ci): mechanical ${CLASS} from failed run"
           if git ls-remote --exit-code --heads \
                "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
                "$BRANCH" >/dev/null 2>&1; then
             echo "branch $BRANCH already on origin — create PR if missing"
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "fix(ci): mechanical ${CLASS} from failed run"
             git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
           fi
-          python3 -c 'import json; print(json.load(open("/tmp/plan.json"))["body"])' > /tmp/pr-body.md
-          TITLE="$(python3 -c 'import json; print(json.load(open("/tmp/plan.json"))["title"])')"
+          python3 /tmp/ci_autofix.py classify --log-file /dev/null --sha "$SHA" --class "$CLASS" > /tmp/plan.json
+          python3 -c 'import json; p=json.load(open("/tmp/plan.json")); open("/tmp/pr-body.md","w").write(p["body"]); open("/tmp/pr-title.txt","w").write(p["title"])'
           gh label create "$LABEL" --description "Mechanical CI autofix draft" --color 6B7280 2>/dev/null || true
-          # Base is the failing head branch so the draft is only the mechanical commit,
-          # not the original PR's whole diff against main.
-          gh pr create --draft --title "$TITLE" --body-file /tmp/pr-body.md \
-            --base "$HEAD_BRANCH" --head "$BRANCH" --label "$LABEL"
+          URL="$(gh pr create --draft --title "$(cat /tmp/pr-title.txt)" --body-file /tmp/pr-body.md \
+            --base "$HEAD_BRANCH" --head "$BRANCH")"
+          gh pr edit "$URL" --add-label "$LABEL" || true
 
-      - name: Comment when there is no mechanical same-repo diff
-        if: steps.plan.outputs.comment_only == 'true' || steps.plan.outputs.same_repo == 'false' || steps.apply.outputs.has_diff == 'false'
+  comment:
+    name: comment when there is no mechanical same-repo diff
+    needs: [classify, apply]
+    if: >
+      always() &&
+      needs.classify.result == 'success' &&
+      (
+        needs.classify.outputs.comment_only == 'true' ||
+        needs.classify.outputs.same_repo == 'false' ||
+        (needs.apply.result == 'success' && needs.apply.outputs.has_diff == 'false')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FINGERPRINT: ${{ steps.plan.outputs.fingerprint }}
           REPO: ${{ github.repository }}
+          SHA: ${{ needs.classify.outputs.sha }}
+          CLASS: ${{ needs.classify.outputs.class }}
+          FINGERPRINT: ${{ needs.classify.outputs.fingerprint }}
+          RUN_ID: ${{ needs.classify.outputs.run_id }}
           EVENT_PR: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
-          PR="$EVENT_PR"
-          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
-            PR="$(gh pr list --search "$SHA" --state open --json number --jq '.[0].number' || true)"
+          if ! [[ "$SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "invalid sha"
+            exit 1
           fi
-          if [ -z "$PR" ] || [ "$PR" = "null" ]; then
+          if ! [[ "$FINGERPRINT" =~ ^[0-9a-f]{16}$ ]]; then
+            echo "invalid fingerprint"
+            exit 1
+          fi
+          PR="$EVENT_PR"
+          if ! [[ "${PR:-}" =~ ^[0-9]+$ ]]; then
+            PR="$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+              --jq '[.[] | select(.state=="open")][0].number' || true)"
+          fi
+          if [ -z "${PR:-}" ] || [ "$PR" = "null" ]; then
             echo "no open PR for $SHA — skip (no issue spam)"
             exit 0
           fi
@@ -260,5 +377,14 @@ jobs:
             echo "fingerprint already present on #$PR"
             exit 0
           fi
+          if ! [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "invalid run id"
+            exit 1
+          fi
+          if ! gh run view "$RUN_ID" --log-failed > /tmp/ci-raw.log 2>/dev/null || [ ! -s /tmp/ci-raw.log ]; then
+            gh run view "$RUN_ID" --log > /tmp/ci-raw.log || true
+          fi
+          python3 scripts/ci_autofix.py redact --log-file /tmp/ci-raw.log > /tmp/ci.log
+          python3 scripts/ci_autofix.py classify --log-file /tmp/ci.log --sha "$SHA" > /tmp/plan.json
           python3 -c 'import json; print(json.load(open("/tmp/plan.json"))["body"])' > /tmp/pr-body.md
           gh pr comment "$PR" --body-file /tmp/pr-body.md
