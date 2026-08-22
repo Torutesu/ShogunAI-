@@ -143,10 +143,10 @@ interface LevelEvent {
 const VOICE_W_RESPONSE = 480;
 const VOICE_H_RESPONSE = 280;
 const VOICE_W_RECORD_COLLAPSED = 240;
-/** Collapsed window width while the connect-offer pill (#86) is showing. Must match the fixed
- *  `.mpill--connect` width in meeting-pill.css — the pill paints every pixel of the window so
- *  there is no transparent dead zone eating clicks. */
-const W_CONNECT_COLLAPSED = 380;
+/** Collapsed window width while an offer pill (meeting offer, or connect offer #86) is showing.
+ *  Must match the fixed `.mpill--offer` / `.mpill--connect` width in meeting-pill.css — the
+ *  pill paints every pixel of the window so there is no transparent dead zone eating clicks. */
+const W_OFFER_COLLAPSED = 380;
 const VOICE_LEVEL_STALE_MS = 1_200;
 const VOICE_ERROR_DISMISS_MS = 4_000;
 
@@ -1360,15 +1360,16 @@ export function App(): JSX.Element {
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
     const hiding = el.classList.contains("handle--hiding");
     const voiceActivity = el.querySelector(".vpill") !== null;
-    // The connect offer's three buttons don't fit the notch cutout — a fixed wider window,
-    // exactly like the voice pill's exception. Fixed, not measured: any measurement here runs
-    // while the viewport is still handle-sized, so flex would have already clamped the pill to
-    // the old width and the "natural" size is unobservable.
-    const connectPill = el.querySelector(".mpill--connect") !== null;
+    // An offer pill's title + three buttons don't fit the notch cutout — a fixed wider window,
+    // exactly like the voice pill's exception, for both the meeting offer and the connect
+    // offer. Fixed, not measured: any measurement here runs while the viewport is still
+    // handle-sized, so flex would have already clamped the pill to the old width and the
+    // "natural" size is unobservable.
+    const offerPill = el.querySelector(".mpill--offer, .mpill--connect") !== null;
     const notchW = voiceActivity
       ? VOICE_W_RECORD_COLLAPSED
-      : connectPill
-        ? W_CONNECT_COLLAPSED
+      : offerPill
+        ? W_OFFER_COLLAPSED
         : hiding
           ? W_HIDE
           : W_HANDLE_FALLBACK;

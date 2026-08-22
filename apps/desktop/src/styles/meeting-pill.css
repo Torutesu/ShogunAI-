@@ -82,17 +82,19 @@
   padding-inline: 12px;
 }
 
-/* connect-this-app offer (#86) — same chin stand-in, but its label + three buttons need more
-   than the notch cutout. Fixed width matching W_CONNECT_COLLAPSED in App.tsx (the voice pill's
-   pattern): the pill fills its window exactly, so no clipped buttons and no transparent
-   dead-click margin. */
+/* Offer pills — the meeting offer and the connect-this-app offer (#86). A title plus up to
+   three buttons doesn't fit the 180px notch cutout, so both get a fixed wider window matching
+   W_OFFER_COLLAPSED in App.tsx (the voice pill's pattern): the pill fills its window exactly,
+   so no clipped buttons and no transparent dead-click margin. */
+.mpill--offer,
 .mpill--connect {
   width: 380px;
   min-width: 380px;
   max-width: 380px;
 }
 /* The title absorbs the slack (and ellipsizes first) so the buttons stay pinned to the right
-   edge regardless of the service name's length. */
+   edge regardless of the title's length. */
+.mpill--offer .mpill__title,
 .mpill--connect .mpill__title {
   flex: 1;
 }
