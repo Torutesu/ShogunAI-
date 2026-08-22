@@ -550,11 +550,16 @@ impl Db {
         op: &'static str,
         f: impl FnOnce(&Connection) -> Result<T, E>,
     ) -> MemoryResult<T> {
+        // A poisoned std mutex stays poisoned forever, but the SQLite connection under it is
+        // still valid (an unwinding writer's open transaction rolled back on drop). Refusing the
+        // guard here would turn one panic anywhere in the process into "capture stops recording
+        // until relaunch" — the exact failure the crash-resilience rule forbids. Record the fault
+        // (visible, issue #121) and keep serving.
         let guard = match self.conn.lock() {
             Ok(g) => g,
-            Err(_) => {
+            Err(poisoned) => {
                 self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
-                return Err(MemoryFault::LockPoisoned);
+                poisoned.into_inner()
             }
         };
         match f(&guard) {
@@ -577,9 +582,10 @@ impl Db {
     ) -> MemoryResult<T> {
         let mut guard = match self.conn.lock() {
             Ok(g) => g,
-            Err(_) => {
+            Err(poisoned) => {
+                // Recover rather than refuse — see `with_conn`.
                 self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
-                return Err(MemoryFault::LockPoisoned);
+                poisoned.into_inner()
             }
         };
         match f(&mut guard) {
@@ -607,9 +613,10 @@ impl Db {
     fn lock_or_note(&self, op: &'static str) -> Option<std::sync::MutexGuard<'_, Connection>> {
         match self.conn.lock() {
             Ok(g) => Some(g),
-            Err(_) => {
+            Err(poisoned) => {
+                // Recover rather than refuse — see `with_conn`.
                 self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
-                None
+                Some(poisoned.into_inner())
             }
         }
     }
@@ -626,9 +633,10 @@ impl Db {
     ) -> Result<T, String> {
         let guard = match self.conn.lock() {
             Ok(g) => g,
-            Err(_) => {
+            Err(poisoned) => {
+                // Recover rather than refuse — see `with_conn`.
                 self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
-                return Err(format!("memory DB unavailable ({op}): lock poisoned"));
+                poisoned.into_inner()
             }
         };
         match f(&guard) {
@@ -651,9 +659,10 @@ impl Db {
     ) -> Result<T, String> {
         let mut guard = match self.conn.lock() {
             Ok(g) => g,
-            Err(_) => {
+            Err(poisoned) => {
+                // Recover rather than refuse — see `with_conn`.
                 self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
-                return Err(format!("memory DB unavailable ({op}): lock poisoned"));
+                poisoned.into_inner()
             }
         };
         match f(&mut guard) {
@@ -3534,12 +3543,23 @@ mod tests {
     }
 
     #[test]
-    fn a_poisoned_lock_is_distinguishable_from_a_query_failure() {
+    fn a_poisoned_lock_is_recorded_but_the_store_keeps_serving() {
+        // std mutex poisoning is permanent, but the SQLite connection under it is still valid —
+        // refusing the guard would turn one panic anywhere into "capture stops until relaunch".
+        // The fault must be visible (issue #121) AND the store must keep answering.
         let db = Db::open_in_memory(clock(1_000)).unwrap();
+        db.capture(&ev("the budget review notes", "h1", 900)).unwrap();
         poison_lock(&db);
-        assert_eq!(db.try_search("anything", 10).unwrap_err(), MemoryFault::LockPoisoned);
-        assert_eq!(db.try_commitment_rows().unwrap_err(), MemoryFault::LockPoisoned);
-        assert_eq!(db.memory_health().fault, Some(MemoryFault::LockPoisoned));
+
+        // Reads and writes recover and answer…
+        assert!(!db.try_search("budget", 10).unwrap().is_empty());
+        assert!(db.try_commitment_rows().unwrap().is_empty());
+        assert!(db.capture(&ev("after the poison", "h2", 950)).is_some());
+
+        // …and the poisoning was recorded, not swallowed (faults_total never resets).
+        let h = db.memory_health();
+        assert!(h.faults_total >= 1, "the poison must be visible in the health signal");
+        assert!(!h.degraded, "a served operation lifts the degraded state");
     }
 
     #[test]
