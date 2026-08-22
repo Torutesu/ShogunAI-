@@ -22,6 +22,7 @@ import {
   signLicenseToken,
 } from '../src/lib/license.ts';
 import { PLANS, formatUsd, planForPriceId, priceIdFor, priceLine } from '../src/lib/pricing.ts';
+import { withTimeout } from '../src/lib/timeout.ts';
 import { automaticTaxEnabled, billingReady, buildCheckoutParams } from '../src/lib/stripe.ts';
 
 /**
@@ -114,6 +115,40 @@ test('automatic tax is opt-in, so an unconfigured Stripe account cannot break ch
   process.env.STRIPE_AUTOMATIC_TAX = '1';
   assert.equal(automaticTaxEnabled(), true);
   delete process.env.STRIPE_AUTOMATIC_TAX;
+});
+
+// ── deadlines on the purchase path ────────────────────────────────────────────
+
+test('a promise that never settles becomes a rejection, not a hang', async () => {
+  // The failure this exists for: production Postgres reached over the nodejs_compat socket shim
+  // stops responding without erroring. try/catch cannot see that — the promise simply never
+  // settles — so the Workers runtime kills the request and every fallback the route was written
+  // to take is skipped.
+  const neverSettles = new Promise<string>(() => {});
+  await assert.rejects(
+    () => withTimeout(neverSettles, 20, 'stuck query'),
+    /stuck query timed out after 20ms/,
+  );
+});
+
+test('work that finishes inside the deadline is returned untouched', async () => {
+  assert.equal(await withTimeout(Promise.resolve('ok'), 1_000, 'fast'), 'ok');
+});
+
+test('a real rejection is passed through, not replaced by the timeout message', async () => {
+  await assert.rejects(
+    () => withTimeout(Promise.reject(new Error('connection refused')), 1_000, 'q'),
+    /connection refused/,
+  );
+});
+
+test('the timer is cleared, so a settled call does not hold the isolate open', async () => {
+  // A pending setTimeout keeps the event loop alive past the response. node:test fails a test
+  // that leaves one behind, so the assertion is that this test terminates at all — but assert
+  // something concrete too, so the test cannot pass by doing nothing.
+  const started = Date.now();
+  assert.equal(await withTimeout(Promise.resolve(1), 60_000, 'fast'), 1);
+  assert.ok(Date.now() - started < 1_000, 'must not wait for the deadline it did not need');
 });
 
 // ── checkout session params ───────────────────────────────────────────────────

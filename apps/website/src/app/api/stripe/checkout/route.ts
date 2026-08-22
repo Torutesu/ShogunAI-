@@ -12,11 +12,15 @@ import {
   checkoutTrialDays,
   stripe,
 } from '@/lib/stripe';
+import { withTimeout } from '@/lib/timeout';
 import { clientIp } from '@/lib/waitlist-auth';
 import { isValidClaimNonce } from '@/lib/license';
 import { isValidEmail } from '@/lib/referral';
 
 export const runtime = 'nodejs';
+
+/** Deadline for the returning-buyer lookup. See the note at the call site. */
+const CUSTOMER_LOOKUP_TIMEOUT_MS = 2_000;
 
 /**
  * POST /api/stripe/checkout  — issue #8, step 2 of the flow.
@@ -58,7 +62,18 @@ export async function POST(req: Request) {
   try {
     // Reuse the Stripe customer when we already know this email, so a returning buyer does not
     // end up with two customers and two portals.
-    const known = email ? await findCustomerByEmail(email) : null;
+    //
+    // Bounded, and treated as "not known" when the deadline passes. A stalled lookup would
+    // otherwise hang the request until the runtime kills it, which costs the sale outright; the
+    // worst a timeout costs is a second Stripe customer for a returning buyer, and the webhook
+    // writes the authoritative link either way. Losing the sale is the larger loss.
+    const known = email
+      ? await withTimeout(findCustomerByEmail(email), CUSTOMER_LOOKUP_TIMEOUT_MS, 'customer lookup')
+          .catch((err) => {
+            console.error('customer lookup failed; continuing as a new customer:', err);
+            return null;
+          })
+      : null;
 
     const session = await stripe().checkout.sessions.create(
       buildCheckoutParams({
@@ -92,6 +107,14 @@ export async function POST(req: Request) {
       `checkout error: type=${String(err.type)} code=${String(err.code)} ` +
         `param=${String(err.param)} message=${String(err.message)}`,
     );
+    // Stripe answers `resource_missing` on the price when the configured Price IDs and the secret
+    // key belong to different modes — a live key cannot see a test price, and vice versa. Nothing
+    // in a Price ID encodes its mode, so no startup check can catch this; naming it in the
+    // response is what keeps the next occurrence from being a log-archaeology exercise. Safe to
+    // expose: it describes our own misconfiguration, not the buyer or the key.
+    if (err.code === 'resource_missing' && String(err.param).includes('price')) {
+      return fail('server_error', { reason: 'price_mode_mismatch' });
+    }
     return fail('server_error');
   }
 }
