@@ -14,13 +14,28 @@ import type { SupportReport } from './support';
  * every failure path here logs and returns instead of throwing.
  */
 
-/** Where notifications go. Overridable so staging can point somewhere harmless. */
-export const DEFAULT_NOTIFY_TO = 'info@shogunaios.com';
 /**
- * Envelope sender. Must be an address on a domain verified in Resend, or the provider rejects
- * the send — this is the field most likely to be wrong on first deploy.
+ * Where notifications go.
+ *
+ * A mailbox that actually receives, on purpose. `info@shogunaios.com` is the address the site
+ * publishes, but that domain has no MX record — mail to it is a black hole, and a notification
+ * nobody receives is worse than none at all because it looks like it works. Point this at the
+ * operator's real inbox until `shogunaios.com` can accept mail, then move it back.
  */
-export const DEFAULT_NOTIFY_FROM = 'info@shogunaios.com';
+export const DEFAULT_NOTIFY_TO = 'selectdev111@gmail.com';
+/**
+ * Envelope sender: Resend's shared sandbox address, which needs no DNS work at all.
+ *
+ * The trade-off it carries: the sandbox sender only delivers to the address the Resend account
+ * was registered with, so it works *only* while [`DEFAULT_NOTIFY_TO`] is that same address.
+ * That is the deal being taken here — day-one delivery with nothing to configure, instead of a
+ * correct-looking setup that silently sends nowhere.
+ *
+ * Upgrade path, once `shogunaios.com` has SPF/DKIM verified in Resend: set both
+ * `SUPPORT_NOTIFY_FROM` and `SUPPORT_NOTIFY_TO` to `info@shogunaios.com` and the restriction
+ * lifts — no code change, the env vars already override both.
+ */
+export const DEFAULT_NOTIFY_FROM = 'onboarding@resend.dev';
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 

@@ -142,9 +142,13 @@ test('notifications are off without an API key and on with one', () => {
   assert.deepEqual(on, { apiKey: 'secret', to: DEFAULT_NOTIFY_TO, from: DEFAULT_NOTIFY_FROM });
 });
 
-test('the default destination is the shared inbox on the live domain', () => {
-  assert.equal(DEFAULT_NOTIFY_TO, 'info@shogunaios.com');
-  assert.equal(DEFAULT_NOTIFY_FROM, 'info@shogunaios.com');
+test('the defaults are a mailbox that receives and a sender that needs no DNS', () => {
+  // shogunaios.com has no MX, so defaulting the destination there would send every
+  // notification into a black hole that still reports success.
+  assert.equal(DEFAULT_NOTIFY_TO, 'selectdev111@gmail.com');
+  // Resend's sandbox sender: delivers with no domain verification, but only to the account
+  // owner's address — which is why these two must stay in step until SPF/DKIM is set up.
+  assert.equal(DEFAULT_NOTIFY_FROM, 'onboarding@resend.dev');
 });
 
 test('env overrides the destination without touching the key', () => {

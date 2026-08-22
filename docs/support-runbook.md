@@ -15,7 +15,7 @@ admin API（トリアージ）。本書は「届いた報告をどう処理す�
   → POST https://shogunaios.com/api/support/report (apps/website)
       - レート制限 5件/時/IP、ボディ 8KB 上限、カテゴリ・長さ・メール検証
       - support_tickets 行を作成（status = open）
-      - info@shogunaios.com へ通知メール（Resend。best-effort、失敗しても保存は成功）
+      - selectdev111@gmail.com へ通知メール（Resend。best-effort、失敗しても保存は成功）
   → GET/PATCH https://shogunaios.com/api/admin/support（x-admin-token）
 ```
 
@@ -25,9 +25,16 @@ admin API（トリアージ）。本書は「届いた報告をどう処理す�
 
 ## 2. トリアージ手順（対応方法）
 
-> **通知先: `info@shogunaios.com`。** チケット作成時に Resend 経由でメールが飛ぶ。
+> **通知先: `selectdev111@gmail.com`。** チケット作成時に Resend 経由でメールが飛ぶ。
 > 件名は `[bug] 本文の先頭60字…`、Reply-To は報告者のメール（記入があれば）なので、
 > 受信箱でそのまま返信すれば本人に届く。
+>
+> サイトが公開している窓口は `info@shogunaios.com` だが、**そのドメインには MX が無い**
+> ので通知の宛先には使えない（送れても受信できず、成功したように見えて消える）。
+> 実際に受け取れる Gmail を宛先にしてある。送信元は Resend のサンドボックス
+> `onboarding@resend.dev` で、ドメイン検証なしに送れる代わりに **Resend アカウントの
+> 登録アドレス宛にしか届かない** — つまり Resend は `selectdev111@gmail.com` で
+> 登録すること。
 >
 > **ただしメールは補助であって台帳ではない。** 通知は best-effort で、失敗しても
 > 報告の保存は成功扱いになる（保存済みのものを「送り直してください」と言わせない
@@ -35,8 +42,8 @@ admin API（トリアージ）。本書は「届いた報告をどう処理す�
 >
 > **送信が止まる条件**（どれも報告の保存自体は成功する）:
 > - `RESEND_API_KEY` 未設定 → 通知は完全に無効。**本番で未設定だと誰にも届かない**
-> - `SUPPORT_NOTIFY_FROM` のドメインが Resend で未検証（SPF/DKIM）→ 全通信が拒否
-> - `shogunaios.com` に MX 未設定 → 送れても `info@` 側で受信できない
+> - Resend アカウントの登録アドレスと宛先が食い違う → サンドボックス送信元は拒否される
+> - 独自ドメイン送信へ移行したのに SPF/DKIM 未検証 → 全通信が拒否
 >
 > 疑わしいときは Worker のログで `support notification rejected: HTTP <status>` を探す。
 
@@ -83,11 +90,19 @@ curl -s -X PATCH https://shogunaios.com/api/admin/support \
 - レート制限（5件/時/IP）と 8KB 上限がスパムの一次防御。荒らしが観測されたら
   `ip_hash` で照合し、`rate-limit` のバケット値を絞る（コード変更）。
 
+## 3.5 公開窓口の宛先（未了）
+
+サイトの privacy / careers は `info@shogunaios.com` を公開しているが、`shogunaios.com`
+には MX が無いため**この宛先に来たメールは届かない**。Cloudflare Email Routing で
+`info@shogunaios.com` → `selectdev111@gmail.com` の転送を設定すれば解消する。
+設定後は通知の宛先も `info@` に寄せられる（`SUPPORT_NOTIFY_TO` / `_FROM` を
+両方 `info@shogunaios.com` にし、Resend でドメイン検証を済ませる）。
+
 ## 4. プライバシー境界（変えないこと）
 
 - チケット本文はユーザー著作のテキスト。保存先は **Postgres（運営 DB）のみ**、
-  加えて **info@shogunaios.com への通知メール**にだけ載る。分析イベント（PostHog）
-  には件数以外を載せない。
+  加えて **運用者の通知メール**にだけ載る。分析イベント（PostHog）には件数以外を
+  載せない。
 - email は返信のためだけに使う。通知メールの Reply-To に入るのはこの用途。
   GitHub Issue・ログ・分析へ転記しない。
 - デスクトップ側は送信成功時に traceability_log へ 1 行（route = `support`、
