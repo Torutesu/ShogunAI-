@@ -136,6 +136,8 @@ the report:
 recording it as a baseline for that SHA would be wrong. `db_path` and `out_dir` are recorded as
 final path components only — where the scratch directory lived on one contributor's disk is
 machine metadata, not part of what defines the result, and committed baselines are public.
+The commit is embedded at build time. If that binary later runs after its source checkout moves to
+another commit, the embedded build commit remains unchanged and the run is marked dirty.
 
 Report filenames include every runtime knob and storage/retrieval mode. Repeating an identical run
 creates an atomic `-runN` sibling; persistence never opens an existing artifact for writing.

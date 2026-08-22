@@ -20,7 +20,8 @@ pub struct Environment {
     /// `git rev-parse HEAD`, or `null` outside a checkout.
     pub git_commit: Option<String>,
     /// `true` when the working tree had uncommitted changes — the result then belongs to no commit
-    /// at all, and treating it as a baseline for `git_commit` would be wrong.
+    /// at all, and treating it as a baseline for `git_commit` would be wrong. Also true when the
+    /// source checkout has moved away from the commit embedded when the binary was built.
     pub git_dirty: Option<bool>,
     /// `"debug"` or `"release"`. A debug-build latency figure is roughly an order of magnitude off
     /// and must never be quoted against an SLO; `docs/phase1-implementation-plan.md` requires SLO
@@ -43,8 +44,22 @@ impl Environment {
                 .success()
                 .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
         };
-        let git_commit = git(&["rev-parse", "HEAD"]).filter(|s| !s.is_empty());
-        let git_dirty = git(&["status", "--porcelain"]).map(|s| !s.trim().is_empty());
+        let git_commit = option_env!("MEMORY_BENCH_BUILD_GIT_COMMIT")
+            .filter(|commit| !commit.is_empty())
+            .map(str::to_string);
+        let build_dirty = match option_env!("MEMORY_BENCH_BUILD_GIT_DIRTY") {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => None,
+        };
+        let runtime_commit = git(&["rev-parse", "HEAD"]).filter(|commit| !commit.is_empty());
+        let runtime_dirty = git(&["status", "--porcelain"]).map(|status| !status.trim().is_empty());
+        let git_dirty = reconcile_git_state(
+            git_commit.as_deref(),
+            build_dirty,
+            runtime_commit.as_deref(),
+            runtime_dirty,
+        );
         Self {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
@@ -57,6 +72,20 @@ impl Environment {
             },
         }
     }
+}
+
+fn reconcile_git_state(
+    build_commit: Option<&str>,
+    build_dirty: Option<bool>,
+    runtime_commit: Option<&str>,
+    runtime_dirty: Option<bool>,
+) -> Option<bool> {
+    let build_dirty = build_dirty?;
+    let source_moved = match (build_commit, runtime_commit) {
+        (Some(built), Some(current)) => built != current,
+        _ => false,
+    };
+    Some(build_dirty || runtime_dirty.unwrap_or(false) || source_moved)
 }
 
 /// How the run was configured beyond the knobs the user set — the facts that decide what the
@@ -190,7 +219,7 @@ pub struct BenchReport {
 pub const BENCHMARK_NAME: &str = "shogun-memory-bench";
 /// Report schema version. Bump when a field changes meaning, so old reports are not silently
 /// re-read under new semantics.
-pub const REPORT_VERSION: &str = "0.4";
+pub const REPORT_VERSION: &str = "0.5";
 
 impl BenchReport {
     /// Build the SLO check from the query-latency summary, if there is one.
@@ -596,5 +625,13 @@ mod tests {
         assert!(validity
             .disqualifications
             .contains(&Disqualification::InsufficientQuerySamples));
+    }
+
+    #[test]
+    fn checkout_moving_after_build_marks_provenance_dirty() {
+        assert_eq!(
+            reconcile_git_state(Some("built"), Some(false), Some("later"), Some(false)),
+            Some(true)
+        );
     }
 }
