@@ -136,6 +136,23 @@ fn the_temporal_corpus_supersedes_earlier_facts() {
     }
 }
 
+#[test]
+fn minimum_valid_temporal_corpus_keeps_history_for_every_query() {
+    for queries in 1..=memory_bench::workloads::temporal_project_count() {
+        let events = memory_bench::workloads::minimum_temporal_events(queries);
+        let workload = generate("temporal", 42, events, queries);
+        assert_eq!(workload.events.len(), events, "{queries} queries");
+        assert_eq!(workload.queries.len(), queries, "{queries} queries");
+        assert!(
+            workload
+                .queries
+                .iter()
+                .all(|query| !query.superseded.is_empty()),
+            "{queries} queries at minimum {events} events lost temporal history"
+        );
+    }
+}
+
 /// The full pipeline, at a size that finishes fast. This is what the CI job runs.
 #[test]
 fn benchmark_runs_end_to_end_and_reports_every_required_field() {
@@ -285,6 +302,28 @@ fn an_unknown_workload_is_an_error_not_a_default() {
 }
 
 #[test]
+fn direct_library_calls_reject_invalid_resource_bounds_without_panicking() {
+    let cfg = BenchConfig {
+        write_batch: 0,
+        ..BenchConfig::smoke()
+    };
+    let error = memory_bench::run(&cfg).expect_err("zero batch must be rejected");
+    assert!(error.to_string().contains("--write-batch"), "{error}");
+}
+
+#[test]
+fn temporal_library_calls_require_real_superseded_history() {
+    let cfg = BenchConfig {
+        workload: "temporal".to_string(),
+        events: 1,
+        queries: 1,
+        ..BenchConfig::smoke()
+    };
+    let error = memory_bench::run(&cfg).expect_err("one event cannot measure supersession");
+    assert!(error.to_string().contains("at least 3 events"), "{error}");
+}
+
+#[test]
 fn an_existing_db_is_refused_not_reused() {
     // Issue #221 (Severe): the benchmark migrates the schema and writes synthetic events into
     // whatever file it is handed, so an existing database must never be accepted — and must be
@@ -311,20 +350,19 @@ fn an_existing_db_is_refused_not_reused() {
         "refusal must leave the file untouched"
     );
 
-    // A stale WAL sidecar next to a *fresh* path is refused too: SQLite would replay it into the
-    // new database, silently seeding it with someone else's rows.
-    let db2 = dir.join("fresh.db");
-    std::fs::write(dir.join("fresh.db-wal"), b"stale wal").expect("seed wal");
+    // Existing directories are caller-owned too. The marker proves refusal never enters or clears
+    // them; DB/WAL/SHM only ever live below a directory this run created atomically.
+    let db2 = dir.join("somebody-elses-run");
+    std::fs::create_dir(&db2).expect("seed existing directory");
+    let marker = db2.join("personal-memory-do-not-touch");
+    std::fs::write(&marker, b"owned").expect("seed marker");
     let cfg = BenchConfig {
         db_path: Some(db2.to_string_lossy().into_owned()),
         ..BenchConfig::smoke()
     };
-    let err = memory_bench::run(&cfg).expect_err("stale sidecar must be refused");
-    assert!(
-        err.to_string().contains("-wal"),
-        "error names the sidecar: {err}"
-    );
-    assert!(!db2.exists(), "refusal must not create the database either");
+    let err = memory_bench::run(&cfg).expect_err("existing directory must be refused");
+    assert!(err.to_string().contains("already exists"), "{err}");
+    assert_eq!(std::fs::read(&marker).expect("marker survives"), b"owned");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -345,7 +383,67 @@ fn a_fresh_db_path_still_works_and_reports_no_wrong_merges() {
     // The honest backend merges only byte-identical repeats, so the wrong-merge counter — the
     // issue #221 guard against rewarding lossy merging — must sit at exactly zero here.
     assert_eq!(report.writes.wrong_merges, 0);
-    assert!(db.exists());
+    assert!(
+        db.is_dir(),
+        "--db claims a private directory, not a caller DB file"
+    );
+    assert!(db.join("memory-bench.sqlite").is_file());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&db)
+                .expect("scratch metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "scratch directory must not expose benchmark data to other users"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn two_runs_cannot_claim_the_same_db_directory() {
+    let dir =
+        std::env::temp_dir().join(format!("memory-bench-db-exclusive-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let db = dir.join("exclusive-run");
+    let cfg = BenchConfig {
+        events: 30,
+        queries: 1,
+        write_batch: 10,
+        db_path: Some(db.to_string_lossy().into_owned()),
+        ..BenchConfig::smoke()
+    };
+    let left = cfg.clone();
+    let right = cfg;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let first_barrier = barrier.clone();
+    let first = std::thread::spawn(move || {
+        first_barrier.wait();
+        memory_bench::run(&left)
+    });
+    let second = std::thread::spawn(move || {
+        barrier.wait();
+        memory_bench::run(&right)
+    });
+    let outcomes = [
+        first.join().expect("first thread"),
+        second.join().expect("second thread"),
+    ];
+    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|result| result
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("already exists")))
+            .count(),
+        1
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

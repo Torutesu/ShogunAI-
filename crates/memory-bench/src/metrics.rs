@@ -118,6 +118,11 @@ pub struct WriteStats {
 }
 
 impl WriteStats {
+    /// Whether write-derived improvement scores are safe to compare.
+    pub fn valid_for_improvement(&self) -> bool {
+        self.wrong_merges == 0 && self.failed == 0
+    }
+
     /// Rows held per distinct fact. 1.0 is perfect; 2.0 means the store is twice the size the
     /// information in it requires.
     ///
@@ -125,7 +130,7 @@ impl WriteStats {
     /// from `rows_after` (what the database really holds) rather than from the number of writes
     /// we submitted.
     pub fn write_amplification(&self) -> Option<f64> {
-        if self.unique_facts == 0 {
+        if self.unique_facts == 0 || !self.valid_for_improvement() {
             return None;
         }
         Some(self.rows_after as f64 / self.unique_facts as f64)
@@ -136,16 +141,16 @@ impl WriteStats {
     /// Only merges onto a row carrying the same fact count. A backend that combined two different
     /// memories would otherwise be rewarded for destroying information (issue #221): collapsing
     /// "Mom likes tea" into "Mom is allergic to tea" must never raise this number. Wrong merges
-    /// are excluded from the numerator and reported separately as [`WriteStats::wrong_merges`].
+    /// disqualify the score entirely. Subtracting them is insufficient: destructive merging also
+    /// shrinks `rows_after`, so publishing either write score would still reward data loss.
     ///
     /// `None` when the workload contained no repeats — in a clean corpus this metric has no
     /// denominator, and reporting 0% would suggest a failure where there was nothing to detect.
     pub fn duplicate_collapse_rate(&self) -> Option<f64> {
-        if self.duplicate_events == 0 {
+        if self.duplicate_events == 0 || !self.valid_for_improvement() {
             return None;
         }
-        let correct = self.deduplicated.saturating_sub(self.wrong_merges);
-        Some(correct as f64 / self.duplicate_events as f64)
+        Some(self.deduplicated as f64 / self.duplicate_events as f64)
     }
 }
 
@@ -208,6 +213,9 @@ impl QualityAccumulator {
 
     pub fn record_failure(&mut self) {
         self.failed += 1;
+        // A failed query is a measured miss, not an absent sample. Omitting it from the denominator
+        // would let a backend fail hard queries and inflate recall/MRR with only easy successes.
+        self.first_correct_rank.push(None);
     }
 
     pub fn queries(&self) -> usize {
@@ -332,25 +340,33 @@ mod tests {
     }
 
     #[test]
-    fn wrong_merges_never_raise_the_collapse_rate() {
+    fn wrong_merges_disqualify_all_write_improvement_scores() {
         // Issue #221: a backend that combines two *different* memories destroys information and
-        // must not be scored as if it deduplicated. 150 reported merges of which 100 were wrong →
-        // only the 50 correct ones count.
+        // must not receive a score derived from the smaller, damaged database.
         let w = WriteStats {
             deduplicated: 150,
             wrong_merges: 100,
+            rows_after: 200,
+            unique_facts: 1_000,
             duplicate_events: 300,
             ..Default::default()
         };
-        assert!((w.duplicate_collapse_rate().unwrap() - 50.0 / 300.0).abs() < 1e-12);
-        // Pathological accounting (more wrong than reported) saturates at zero, never underflows.
+        assert!(!w.valid_for_improvement());
+        assert!(w.write_amplification().is_none());
+        assert!(w.duplicate_collapse_rate().is_none());
+    }
+
+    #[test]
+    fn failed_writes_disqualify_write_improvement_scores() {
         let w = WriteStats {
-            deduplicated: 10,
-            wrong_merges: 999,
+            failed: 1,
+            rows_after: 299,
+            unique_facts: 300,
             duplicate_events: 300,
             ..Default::default()
         };
-        assert_eq!(w.duplicate_collapse_rate(), Some(0.0));
+        assert!(w.write_amplification().is_none());
+        assert!(w.duplicate_collapse_rate().is_none());
     }
 
     #[test]
@@ -402,6 +418,19 @@ mod tests {
         q.record(&[1], &facts, &["missing".into()], &[]);
         assert_eq!(q.recall_at(10), Some(0.0));
         assert_eq!(q.mrr(), Some(0.0));
+    }
+
+    #[test]
+    fn a_failed_query_stays_in_quality_denominators() {
+        let facts = fact_map(&[(1, "a")]);
+        let mut q = QualityAccumulator::new();
+        q.record(&[1], &facts, &["a".into()], &[]);
+        q.record_failure();
+        let summary = q.summary(10);
+        assert_eq!(summary.queries, 2);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.recall_at_1, Some(0.5));
+        assert_eq!(summary.mrr, Some(0.5));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! lets a later intervention be measured by exactly this code.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use spike_harness::MonoClock;
@@ -21,13 +22,15 @@ use crate::workloads;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
-    #[error("unknown workload {0:?} (valid: {})", crate::workloads::ALL.join(", "))]
-    UnknownWorkload(String),
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
+    #[error("generated {workload:?} workload is invalid: {reason}")]
+    InvalidGeneratedWorkload { workload: String, reason: String },
     #[error(
-        "--db {0:?} already exists — refusing to touch it. The benchmark migrates the schema and \
-         writes synthetic events into whatever file it is given, so it requires disposable \
-         storage: pass a path that does not exist yet (stale -wal/-shm sidecars count too), or \
-         omit --db for an in-memory run."
+        "--db {0:?} already exists — refusing to touch it. The benchmark requires a new disposable \
+         scratch directory that it can claim atomically; it creates memory-bench.sqlite and all \
+         sidecars inside that directory. Pass a path that does not exist yet, or omit --db for an \
+         in-memory run."
     )]
     DbPathExists(String),
     #[error(transparent)]
@@ -47,29 +50,31 @@ const RESOURCE_SAMPLE_EVERY: usize = 500;
 /// `write_report` is separate ([`persist`]) so a test can run a benchmark without touching the
 /// filesystem.
 pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
-    let workload = workloads::by_name(&config.workload)
-        .ok_or_else(|| RunError::UnknownWorkload(config.workload.clone()))?;
+    config.validate()?;
+    let workload =
+        workloads::by_name(&config.workload).ok_or_else(|| RunError::InvalidGeneratedWorkload {
+            workload: config.workload.clone(),
+            reason: "validated workload could not be resolved".to_string(),
+        })?;
 
     // 1. Seed and generate. The corpus exists in full before the backend is even opened, so
     //    generation cost can never leak into a write-latency measurement.
     let mut rng = Rng::new(config.seed);
     let generated = workload.generate(&mut rng, config.events, config.queries);
+    validate_generated_workload(config, &generated)?;
 
     let clock = MonoClock::new();
     let mut resources = ResourceTracker::new();
     resources.sample(clock.elapsed_ns());
 
-    // 2. Open a fresh store. Fresh is enforced, not assumed: `shogun_memory::open` migrates the
-    //    schema and the ingest loop writes synthetic events into whatever file it is handed, so an
-    //    existing database — a real one most of all — must never be accepted (issue #221). Fresh
-    //    also means never cleared: a `DELETE FROM` leaves the file at its high water mark and
-    //    freelist pages would make the storage numbers meaningless.
+    // 2. Open a fresh store. The caller's path is claimed as a directory in one atomic operation;
+    //    SQLite only sees a child path inside that directory. There is no check/open gap in which
+    //    another process can place a personal DB where the benchmark is about to migrate and write.
+    //    Fresh also means never cleared: a `DELETE FROM` leaves high-water and freelist pages that
+    //    would make storage numbers meaningless.
     let in_memory = config.db_path.is_none();
-    if let Some(p) = &config.db_path {
-        refuse_existing_db(p)?;
-    }
     let mut backend = match &config.db_path {
-        Some(p) => ShogunBackend::open(p)?,
+        Some(p) => ShogunBackend::open(claim_scratch_db(p)?)?,
         None => ShogunBackend::in_memory()?,
     };
     let initial_size = backend.size()?;
@@ -87,7 +92,7 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         duplicate_events: generated.duplicate_events() as u64,
     };
 
-    // Parse rejects `--write-batch 0`, so the value used is the value the report records.
+    // Central config validation rejects zero for CLI and direct library callers alike.
     let batch = config.write_batch;
     let mut open_batch = false;
     for (i, ev) in generated.events.iter().enumerate() {
@@ -167,6 +172,8 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     resources.sample(clock.elapsed_ns());
     let final_size = backend.size()?;
     let query_summary = LatencySummary::of(&query_latency);
+    let quality = quality.summary(config.k);
+    let validity = crate::report::MeasurementValidity::assess(&writes, &quality);
     let mode = RunMode {
         // v0.1 measures the lexical half only. The backend passes no query embedding, so RRF fuses
         // one list and hybrid search degenerates to FTS. Wiring the ONNX embedder in (it needs a
@@ -177,7 +184,7 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         in_memory,
     };
     let environment = Environment::detect();
-    let slo = BenchReport::slo_for(query_summary, mode, environment.profile);
+    let slo = BenchReport::slo_for(query_summary, mode, environment.profile, validity.valid);
 
     Ok(BenchReport {
         benchmark: BENCHMARK_NAME,
@@ -191,12 +198,13 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         environment,
         mode,
         backend: backend.name(),
+        validity,
         write_amplification: writes.write_amplification(),
         duplicate_collapse_rate: writes.duplicate_collapse_rate(),
         writes,
         write_latency: LatencySummary::of(&write_latency),
         query_latency: query_summary,
-        quality: quality.summary(config.k),
+        quality,
         resources: resources.summary(),
         storage: StorageReport {
             initial_logical_bytes: initial_size.logical_bytes,
@@ -210,21 +218,67 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     })
 }
 
-/// The `--db` contract (issue #221): the path must not exist, and neither may its `-wal`/`-shm`
-/// sidecars — a stale WAL would be replayed into the fresh database, silently seeding it with
-/// someone else's rows. Nothing is ever deleted, truncated, or "reset" on the caller's behalf;
-/// benchmarks require disposable storage and the caller proves it by handing over a name that
-/// holds nothing.
-fn refuse_existing_db(path: &str) -> Result<(), RunError> {
-    let mut candidates = vec![path.to_string()];
-    candidates.push(format!("{path}-wal"));
-    candidates.push(format!("{path}-shm"));
-    for c in candidates {
-        if std::path::Path::new(&c).exists() {
-            return Err(RunError::DbPathExists(c));
+fn validate_generated_workload(
+    config: &BenchConfig,
+    generated: &crate::workload::GeneratedWorkload,
+) -> Result<(), RunError> {
+    if generated.events.len() != config.events {
+        return Err(RunError::InvalidGeneratedWorkload {
+            workload: config.workload.clone(),
+            reason: format!(
+                "requested {} events but generator produced {}",
+                config.events,
+                generated.events.len()
+            ),
+        });
+    }
+    if generated.queries.is_empty() {
+        return Err(RunError::InvalidGeneratedWorkload {
+            workload: config.workload.clone(),
+            reason: "generator produced no queries".to_string(),
+        });
+    }
+    if config.workload == "temporal" {
+        let expected_queries = config
+            .queries
+            .min(crate::workloads::temporal_project_count());
+        if generated.queries.len() != expected_queries
+            || generated
+                .queries
+                .iter()
+                .any(|query| query.superseded.is_empty())
+        {
+            return Err(RunError::InvalidGeneratedWorkload {
+                workload: config.workload.clone(),
+                reason: format!(
+                    "expected {expected_queries} queries with superseded history, got {} total",
+                    generated.queries.len()
+                ),
+            });
         }
     }
     Ok(())
+}
+
+/// Atomically claim the entire namespace SQLite will use.
+///
+/// A file-level `exists()` check followed by SQLite open is unsafe: another process can put a DB
+/// at the path between those operations. Directory creation has create-new semantics, and keeping
+/// DB/WAL/SHM beneath the owned directory avoids a second race across sidecar names.
+fn claim_scratch_db(path: &str) -> Result<PathBuf, RunError> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(path) {
+        Ok(()) => Ok(std::path::Path::new(path).join("memory-bench.sqlite")),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(RunError::DbPathExists(path.to_string()))
+        }
+        Err(error) => Err(RunError::Io(error)),
+    }
 }
 
 /// Write the report under `out_dir` and return the file path.

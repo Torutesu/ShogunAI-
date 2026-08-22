@@ -90,6 +90,40 @@ pub struct SloCheck {
     pub authoritative: bool,
 }
 
+/// Machine-readable reasons this run must not be used as evidence of an improvement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Disqualification {
+    WrongMerges,
+    WriteFailures,
+    QueryFailures,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MeasurementValidity {
+    pub valid: bool,
+    pub disqualifications: Vec<Disqualification>,
+}
+
+impl MeasurementValidity {
+    pub fn assess(writes: &WriteStats, quality: &QualitySummary) -> Self {
+        let mut disqualifications = Vec::new();
+        if writes.wrong_merges > 0 {
+            disqualifications.push(Disqualification::WrongMerges);
+        }
+        if writes.failed > 0 {
+            disqualifications.push(Disqualification::WriteFailures);
+        }
+        if quality.failed > 0 {
+            disqualifications.push(Disqualification::QueryFailures);
+        }
+        Self {
+            valid: disqualifications.is_empty(),
+            disqualifications,
+        }
+    }
+}
+
 /// The complete artifact.
 #[derive(Debug, Clone, Serialize)]
 pub struct BenchReport {
@@ -104,6 +138,8 @@ pub struct BenchReport {
     pub environment: Environment,
     pub mode: RunMode,
     pub backend: &'static str,
+    /// Explicit validity gate for automated comparison. Consumers must require `valid == true`.
+    pub validity: MeasurementValidity,
     pub writes: WriteStats,
     /// `null` when no writes were measured.
     pub write_latency: Option<LatencySummary>,
@@ -122,7 +158,7 @@ pub struct BenchReport {
 pub const BENCHMARK_NAME: &str = "shogun-memory-bench";
 /// Report schema version. Bump when a field changes meaning, so old reports are not silently
 /// re-read under new semantics.
-pub const REPORT_VERSION: &str = "0.2";
+pub const REPORT_VERSION: &str = "0.3";
 
 impl BenchReport {
     /// Build the SLO check from the query-latency summary, if there is one.
@@ -130,6 +166,7 @@ impl BenchReport {
         query_latency: Option<LatencySummary>,
         mode: RunMode,
         profile: &str,
+        measurement_valid: bool,
     ) -> Option<SloCheck> {
         let q = query_latency?;
         Some(SloCheck {
@@ -139,7 +176,10 @@ impl BenchReport {
             verdict: Verdict::le(q.p95_ms, slo::LOCAL_SEARCH_MS),
             // A debug build, an in-memory database, or a lexical-only run each individually make
             // this number the wrong one to certify against.
-            authoritative: profile == "release" && !mode.in_memory && mode.semantic,
+            authoritative: measurement_valid
+                && profile == "release"
+                && !mode.in_memory
+                && mode.semantic,
         })
     }
 
@@ -233,7 +273,7 @@ recall rest on the smaller number\n",
     if r.writes.wrong_merges > 0 {
         s.push_str(&format!(
             "  WRONG MERGES:     {} — the backend combined events carrying different facts; \
-collapse rate excludes them and this run must not be quoted as an improvement\n",
+all write-improvement scores are invalid\n",
             r.writes.wrong_merges
         ));
     }
@@ -277,8 +317,13 @@ collapse rate excludes them and this run must not be quoted as an improvement\n"
         ));
     }
 
+    let validity = if r.validity.valid {
+        "valid".to_string()
+    } else {
+        format!("INVALID ({:?})", r.validity.disqualifications)
+    };
     s.push_str(&format!(
-        "Run\n  Commit:           {}{}\n  Platform:         {}/{}\n  Wall:             {:.1} s\n",
+        "Run\n  Validity:         {validity}\n  Commit:           {}{}\n  Platform:         {}/{}\n  Wall:             {:.1} s\n",
         r.environment.git_commit.as_deref().unwrap_or("unknown"),
         match r.environment.git_dirty {
             Some(true) => " (dirty)",
@@ -318,7 +363,7 @@ mod tests {
             semantic: false,
             in_memory: true,
         };
-        let check = BenchReport::slo_for(Some(q), mode, "debug").expect("check");
+        let check = BenchReport::slo_for(Some(q), mode, "debug", true).expect("check");
         assert!(check.verdict.is_pass(), "1ms is under the 500ms threshold");
         assert!(
             !check.authoritative,
@@ -341,7 +386,7 @@ mod tests {
             semantic: true,
             in_memory: false,
         };
-        let check = BenchReport::slo_for(Some(q), mode, "release").expect("check");
+        let check = BenchReport::slo_for(Some(q), mode, "release", true).expect("check");
         assert!(check.authoritative);
     }
 
@@ -360,7 +405,7 @@ mod tests {
             semantic: true,
             in_memory: false,
         };
-        let check = BenchReport::slo_for(Some(q), mode, "release").expect("check");
+        let check = BenchReport::slo_for(Some(q), mode, "release", true).expect("check");
         assert!(!check.verdict.is_pass());
     }
 
@@ -370,6 +415,56 @@ mod tests {
             semantic: true,
             in_memory: false,
         };
-        assert!(BenchReport::slo_for(None, mode, "release").is_none());
+        assert!(BenchReport::slo_for(None, mode, "release", true).is_none());
+    }
+
+    #[test]
+    fn invalid_measurement_can_never_certify_an_slo() {
+        let q = LatencySummary {
+            n: 10,
+            min_ms: 1.0,
+            mean_ms: 1.0,
+            p50_ms: 1.0,
+            p95_ms: 1.0,
+            p99_ms: 1.0,
+            max_ms: 1.0,
+        };
+        let mode = RunMode {
+            semantic: true,
+            in_memory: false,
+        };
+        let check = BenchReport::slo_for(Some(q), mode, "release", false).expect("check");
+        assert!(!check.authoritative);
+    }
+
+    #[test]
+    fn validity_names_every_backend_integrity_failure() {
+        let writes = WriteStats {
+            wrong_merges: 1,
+            failed: 2,
+            ..Default::default()
+        };
+        let quality = QualitySummary {
+            queries: 1,
+            failed: 3,
+            recall_at_1: None,
+            recall_at_5: None,
+            recall_at_10: None,
+            mrr: None,
+            temporal_queries: 0,
+            stale_returned: 0,
+            stale_outranked_current: 0,
+            stale_rate: None,
+            stale_outranked_rate: None,
+        };
+        let validity = MeasurementValidity::assess(&writes, &quality);
+        assert_eq!(
+            validity.disqualifications,
+            vec![
+                Disqualification::WrongMerges,
+                Disqualification::WriteFailures,
+                Disqualification::QueryFailures,
+            ]
+        );
     }
 }

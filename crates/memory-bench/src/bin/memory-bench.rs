@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use memory_bench::config::{
     BenchConfig, DEFAULT_EVENTS, DEFAULT_K, DEFAULT_QUERIES, DEFAULT_WARMUP, DEFAULT_WRITE_BATCH,
 };
-use memory_bench::{report, runner, workloads};
+use memory_bench::{report, runner};
 
 const USAGE: &str = "\
 memory-bench — SHOGUN memory ingestion and retrieval benchmark
@@ -30,10 +30,10 @@ OPTIONS:
     --k <N>             Results requested per query. Default: 10
     --warmup <N>        Unmeasured queries before measurement. Default: 20
     --seed <N>          Workload seed. Default: 42. Same seed = same corpus, forever.
-    --db <PATH>         SQLite file to create. Default: in-memory.
-                        The path must NOT exist (nor its -wal/-shm sidecars): the benchmark
-                        migrates and writes synthetic events into the file it is given, so it
-                        only accepts disposable storage and never reuses or resets a database.
+    --db <PATH>         Private SQLite scratch directory to create. Default: in-memory.
+                        PATH must NOT exist. The benchmark claims that directory atomically and
+                        creates memory-bench.sqlite plus WAL/SHM inside it. It never opens PATH as
+                        a database, reuses a directory, or resets caller-owned storage.
                         Quote latency numbers only from a file-backed run — in-memory writes
                         never touch a filesystem and skip fsync entirely.
     --out <DIR>         Write the JSON report into DIR. Default: print the summary only.
@@ -48,7 +48,7 @@ REPRODUCIBILITY:
     certifying an SLO, and the report marks it.
 
 EXAMPLES:
-    memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/b.db --out reports
+    memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/bench-run --out reports
     memory-bench --workload duplicate --events 10000 --queries 200
     memory-bench --workload temporal --events 50000 --queries 12
 ";
@@ -83,15 +83,7 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
                 .map_err(|_| format!("{what} must be a number, got {value:?}"))
         };
         match flag {
-            "--workload" => {
-                if workloads::by_name(value).is_none() {
-                    return Err(format!(
-                        "unknown workload {value:?} (valid: {})",
-                        workloads::ALL.join(", ")
-                    ));
-                }
-                cfg.workload = value.clone();
-            }
+            "--workload" => cfg.workload = value.clone(),
             "--events" => cfg.events = num("--events")?,
             "--queries" => cfg.queries = num("--queries")?,
             "--k" => cfg.k = num("--k")?,
@@ -109,26 +101,7 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
         i += 2;
     }
 
-    // Bounds (issue #221): zero would divide or loop to nothing, and an absurd value — easy for a
-    // script or an agent to generate — would exhaust memory before producing a number anyone
-    // wants. The caps are far above any measurement this benchmark is for.
-    const MAX_EVENTS: usize = 10_000_000;
-    const MAX_QUERIES: usize = 1_000_000;
-    const MAX_K: usize = 1_000;
-    const MAX_WARMUP: usize = 100_000;
-    let bounded = |what: &str, v: usize, min: usize, max: usize| -> Result<(), String> {
-        if v < min || v > max {
-            return Err(format!("{what} must be between {min} and {max}, got {v}"));
-        }
-        Ok(())
-    };
-    bounded("--events", cfg.events, 1, MAX_EVENTS)?;
-    bounded("--queries", cfg.queries, 1, MAX_QUERIES)?;
-    bounded("--k", cfg.k, 1, MAX_K)?;
-    bounded("--warmup", cfg.warmup, 0, MAX_WARMUP)?;
-    // Zero would previously be clamped to 1 at run time while the report recorded 0 — the label
-    // and the experiment disagreed. Reject it at the door instead.
-    bounded("--write-batch", cfg.write_batch, 1, MAX_EVENTS)?;
+    cfg.validate().map_err(|error| error.to_string())?;
     Ok(Some(cfg))
 }
 

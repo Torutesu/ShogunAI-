@@ -24,9 +24,11 @@ Before changing how memory behaves, establish what it currently does. Specifical
 
 ## Running
 
-`--db` only accepts a path that does not exist yet (stale `-wal`/`-shm` sidecars count too).
-The benchmark migrates the schema and writes synthetic events into the file it is given, so it
-requires disposable storage — it never reuses, resets, or deletes an existing database.
+`--db` names a disposable **directory** that must not exist yet. The benchmark claims that whole
+directory atomically, then creates `memory-bench.sqlite`, `memory-bench.sqlite-wal`, and
+`memory-bench.sqlite-shm` inside it. It never opens the caller's path as SQLite, reuses a directory,
+resets a database, or deletes caller-owned storage. This directory contract closes the gap between
+"path does not exist" checking and SQLite opening a file — critical on a personal-memory system.
 
 ```bash
 # Defaults: clean workload, 100k events, 500 queries, seed 42, in-memory.
@@ -35,7 +37,7 @@ cargo run -p memory-bench --release
 # The measurement configuration — on disk, report saved.
 cargo run -p memory-bench --release -- \
   --workload clean --events 100000 --queries 500 --seed 42 \
-  --db /tmp/bench.db --out reports
+  --db /tmp/memory-bench-run --out reports
 
 cargo run -p memory-bench --release -- --workload duplicate --events 10000 --queries 200
 cargo run -p memory-bench --release -- --workload temporal  --events 50000 --queries 12
@@ -89,11 +91,10 @@ contains, not from what we submitted.
 
 **Duplicate collapse rate** — of the repeats the workload contained, the share the backend
 recognised **correctly**. Every reported merge is checked against the fact the row's first writer
-carried; a merge that combined two *different* facts destroyed information and is counted as a
-`wrong_merge` instead — never into the collapse rate. This is what keeps a lossy semantic-dedup
-intervention from scoring above the baseline by throwing memories away. `null` on a clean corpus:
-there was no denominator, and reporting 0% would suggest a failure where there was nothing to
-detect.
+carried. One merge between different facts disqualifies the run and makes both collapse rate and
+write amplification `null`; subtracting bad merges from one numerator is insufficient because data
+loss also shrinks the database. This keeps lossy semantic dedup from scoring above the baseline by
+throwing memories away. `null` on a clean corpus too: there is no denominator.
 
 **Recall@1/5/10 and MRR** — computed the same way `shogun-memory/tests/retrieval_eval.rs` computes
 them, deliberately. Two definitions of recall@5 in one repository would make the scale numbers and
@@ -110,7 +111,9 @@ Mean CPU covers this benchmark's measurement window and nothing else — it is n
 figure and must never be compared against `slo::IDLE_CPU_PCT`, which is defined over a 1-minute
 idle window.
 
-Every rate is nullable. A metric a workload cannot express reports `null`, never `0`.
+Every rate is nullable. A metric a workload cannot express reports `null`, never `0`. Reports also
+carry `validity.valid` plus machine-readable disqualification reasons. Wrong merges, write failures,
+or query failures make the whole run invalid for automated comparison.
 
 ## Reproducibility
 
@@ -128,8 +131,8 @@ All of it is written into the report:
 
 `git_dirty` matters as much as `git_commit`: a run from a modified tree belongs to no commit, and
 recording it as a baseline for that SHA would be wrong. `db_path` and `out_dir` are recorded as
-file names only — where the file lived on one contributor's disk is machine metadata, not part of
-what defines the result, and committed baselines are public.
+final path components only — where the scratch directory lived on one contributor's disk is
+machine metadata, not part of what defines the result, and committed baselines are public.
 
 The seed drives a SplitMix64 defined in `rng.rs` rather than pulled from `rand`, whose generators
 are explicitly allowed to change output between minor versions. A stored baseline has to stay
