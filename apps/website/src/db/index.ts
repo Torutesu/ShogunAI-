@@ -19,13 +19,31 @@ const LOCAL_FALLBACK = 'postgres://postgres:postgres@localhost:5432/shogun_waitl
  */
 let announced = false;
 
+/**
+ * Which transport the last `resolve()` picked, as a fixed token safe to hand to a caller.
+ *
+ * Deliberately an enum of three, not a free-form string: it names the transport and nothing about
+ * the host, the credentials or the error text, so an error response can carry it without leaking
+ * anything. `unresolved` means no query has been attempted in this isolate yet.
+ */
+export type ConnectionMode = 'hyperdrive' | 'direct-binding-missing' | 'direct-no-context' | 'unresolved';
+
+let mode: ConnectionMode = 'unresolved';
+
+/** The transport this isolate is using. See ConnectionMode. */
+export function connectionMode(): ConnectionMode {
+  return mode;
+}
+
 function hyperdriveUrl(): string | null {
   try {
     const env = getCloudflareContext().env as { HYPERDRIVE?: { connectionString?: string } };
     const url = env.HYPERDRIVE?.connectionString ?? null;
+    mode = url ? 'hyperdrive' : 'direct-binding-missing';
     announce(url ? 'hyperdrive' : 'direct: the HYPERDRIVE binding is missing from this deployment');
     return url;
   } catch (e) {
+    mode = 'direct-no-context';
     announce(`direct: the Cloudflare context was unreadable: ${(e as Error).message}`);
     return null;
   }
@@ -42,6 +60,14 @@ function announce(how: string): void {
   if (announced || process.env.NODE_ENV !== 'production') return;
   announced = true;
   console.error(`db: connecting via ${how}`);
+}
+
+/**
+ * Reset the recorded transport. Tests only — production has one isolate-lifetime answer.
+ */
+export function resetConnectionModeForTests(): void {
+  mode = 'unresolved';
+  announced = false;
 }
 
 /**
