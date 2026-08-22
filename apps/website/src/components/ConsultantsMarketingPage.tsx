@@ -62,7 +62,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'Not 10% better. 10×, 100×.',
     comparisonBody:
-      'Five moments from a day spent across several clients. Open a card to swap today for the same day with ShogunAI in it.',
+      'Five moments from a day spent across several clients. Each card holds both: today, and the same day with ShogunAI in it.',
     cases: [
       {
         title: 'Switching between clients',
@@ -138,7 +138,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: '10%の改善ではない。10×、100×。',
     comparisonBody:
-      '複数のクライアントを持つ人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
+      '複数のクライアントを持つ人の1日から5つ。各カードに、いまと ShogunAI のあとを並べています。',
     cases: [
       {
         title: '案件の切り替え',
@@ -213,7 +213,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'No es un 10% mejor. Es 10×, 100×.',
     comparisonBody:
-      'Cinco momentos de un día repartido entre varios clientes. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
+      'Cinco momentos de un día repartido entre varios clientes. Cada tarjeta muestra las dos caras: hoy y el mismo día con ShogunAI.',
     cases: [
       {
         title: 'Cambiar de cliente',
@@ -289,7 +289,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'Nicht 10% besser. 10×, 100×.',
     comparisonBody:
-      'Fünf Momente aus einem Tag zwischen mehreren Kunden. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
+      'Fünf Momente aus einem Tag zwischen mehreren Kunden. Jede Karte zeigt beide Seiten: heute und denselben Tag mit ShogunAI.',
     cases: [
       {
         title: 'Zwischen Kunden wechseln',
@@ -368,7 +368,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'Not 10% better. 10×, 100×.',
     comparisonBody:
-      'Five moments from a day spent across several businesses. Open a card to swap today for the same day with ShogunAI in it.',
+      'Five moments from a day spent across several businesses. Each card holds both: today, and the same day with ShogunAI in it.',
     cases: [
       {
         title: 'Rebuilding the morning',
@@ -441,7 +441,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: '10%の改善ではない。10×、100×。',
     comparisonBody:
-      '複数の事業を持つ人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
+      '複数の事業を持つ人の1日から5つ。各カードに、いまと ShogunAI のあとを並べています。',
     cases: [
       {
         title: '朝、状況を組み立て直す',
@@ -513,7 +513,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'No es un 10% mejor. Es 10×, 100×.',
     comparisonBody:
-      'Cinco momentos de un día repartido entre varios negocios. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
+      'Cinco momentos de un día repartido entre varios negocios. Cada tarjeta muestra las dos caras: hoy y el mismo día con ShogunAI.',
     cases: [
       {
         title: 'Reconstruir la mañana',
@@ -587,7 +587,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'Nicht 10% besser. 10×, 100×.',
     comparisonBody:
-      'Fünf Momente aus einem Tag zwischen mehreren Geschäften. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
+      'Fünf Momente aus einem Tag zwischen mehreren Geschäften. Jede Karte zeigt beide Seiten: heute und denselben Tag mit ShogunAI.',
     cases: [
       {
         title: 'Den Morgen neu zusammensetzen',
@@ -664,7 +664,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'Not 10% better. 10×, 100×.',
     comparisonBody:
-      'Five moments from a day spent across several codebases. Open a card to swap today for the same day with ShogunAI in it.',
+      'Five moments from a day spent across several codebases. Each card holds both: today, and the same day with ShogunAI in it.',
     cases: [
       {
         title: 'Coming back from an interruption',
@@ -738,7 +738,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: '10%の改善ではない。10×、100×。',
     comparisonBody:
-      '複数のコードベースを行き来する人の1日から5つ。カードを押すと、同じ1日が ShogunAI のあとに切り替わります。',
+      '複数のコードベースを行き来する人の1日から5つ。各カードに、いまと ShogunAI のあとを並べています。',
     cases: [
       {
         title: '中断からの復帰',
@@ -810,7 +810,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'No es un 10% mejor. Es 10×, 100×.',
     comparisonBody:
-      'Cinco momentos de un día repartido entre varias bases de código. Pulsa una tarjeta para cambiar hoy por el mismo día con ShogunAI.',
+      'Cinco momentos de un día repartido entre varias bases de código. Cada tarjeta muestra las dos caras: hoy y el mismo día con ShogunAI.',
     cases: [
       {
         title: 'Volver tras una interrupción',
@@ -884,7 +884,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     comparisonEyebrow: 'Before / After',
     comparisonTitle: 'Nicht 10% besser. 10×, 100×.',
     comparisonBody:
-      'Fünf Momente aus einem Tag zwischen mehreren Codebasen. Tippe eine Karte an, um heute gegen denselben Tag mit ShogunAI zu tauschen.',
+      'Fünf Momente aus einem Tag zwischen mehreren Codebasen. Jede Karte zeigt beide Seiten: heute und denselben Tag mit ShogunAI.',
     cases: [
       {
         title: 'Rückkehr nach einer Unterbrechung',
@@ -1048,29 +1048,21 @@ const caseUi: Record<Locale, CaseLabels> = {
     before: 'Before',
     after: 'After',
     lost: 'What it costs:',
-    seeAfter: 'See the same day with ShogunAI',
-    seeBefore: 'Back to today',
   },
   ja: {
     before: 'Before',
     after: 'After',
     lost: '失われるもの:',
-    seeAfter: 'After（ShogunAI のあと）を見る',
-    seeBefore: 'Before に戻る',
   },
   es: {
     before: 'Before',
     after: 'After',
     lost: 'Lo que cuesta:',
-    seeAfter: 'Ver el mismo día con ShogunAI',
-    seeBefore: 'Volver a hoy',
   },
   de: {
     before: 'Before',
     after: 'After',
     lost: 'Was es kostet:',
-    seeAfter: 'Denselben Tag mit ShogunAI ansehen',
-    seeBefore: 'Zurück zu heute',
   },
 };
 
