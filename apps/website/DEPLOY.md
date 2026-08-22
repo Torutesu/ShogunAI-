@@ -108,10 +108,24 @@ Set these per-environment (dashboard → Settings → Variables, or `wrangler se
    which the transaction pooler does not support. Pointing `DATABASE_URL` at `6543`
    connects and authenticates fine, then fails once queries start, which is the most
    expensive way to be wrong. Switch to `6543` only together with `prepare: false`.
-2. **Lower latency (recommended for prod):** create a **Cloudflare Hyperdrive** config
-   pointing at the same Supabase database, bind it in `wrangler.jsonc`, and set
-   `DATABASE_URL` to the Hyperdrive connection string. No app code change is needed —
-   `src/db/index.ts` just reads `DATABASE_URL`.
+2. **Hyperdrive (what production uses).** The shim in option 1 does not hold up: roughly half
+   of all production database calls came back `proxy request failed, cannot connect to the
+   specified address`, and postgres.js surfaces that asynchronously, so it escaped the routes'
+   error handling and killed whole requests. Hyperdrive terminates the connection inside
+   Cloudflare's network instead.
+
+   The config is bound as `HYPERDRIVE` in `wrangler.jsonc`. `src/db/index.ts` prefers the
+   binding and falls back to `DATABASE_URL` wherever the binding is absent — `next dev`, the
+   test suites, `db:migrate` — so `DATABASE_URL` is still required, and is still what
+   migrations run against.
+
+   Two things to keep right when re-creating the config:
+
+   - **Connection type: public.** Supabase's pooler is a public endpoint; the private options
+     are for databases behind a Cloudflare Tunnel or Workers VPC.
+   - **Query caching: off.** This database holds licence validity and subscription status. A
+     cached read means a revoked licence keeps verifying until the entry expires. What we want
+     from Hyperdrive is the connection, not the cache.
 
 ## Running migrations
 
