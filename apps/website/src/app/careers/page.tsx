@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import { PageHeader, PageShell } from '@/components/PageShell';
-import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { getI18n } from '@/i18n/server';
 
@@ -33,9 +32,6 @@ export default async function CareersPage() {
           <h2 className="mb-6 mt-16 font-display text-2xl font-semibold">{t.careers.openRolesTitle}</h2>
           <Card className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-muted">{t.careers.noRoles}</p>
-            <Button asChild variant="secondary">
-              <a href="mailto:info@shogunaios.com">{t.careers.apply}</a>
-            </Button>
           </Card>
         </div>
       </section>
