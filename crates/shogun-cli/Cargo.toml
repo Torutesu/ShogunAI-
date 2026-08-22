@@ -24,7 +24,6 @@ path = "src/main.rs"
 shogun-mcp = { path = "../shogun-mcp" }
 shogun-agents = { path = "../shogun-agents" }
 shogun-core = { path = "../shogun-core" }
-serde_json = "1"
 
 [lints]
 workspace = true

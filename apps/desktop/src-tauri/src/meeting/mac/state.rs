@@ -60,8 +60,6 @@ pub(super) struct Lane {
     /// Capture/ASR paused while the meeting interval stays open (waveform toggle).
     /// Not a machine state — Stop still ends the session; pause only holds the mic/ASR lane.
     pub(super) paused: bool,
-    /// Visible reason the meeting fell back to typed notes. Never hide a rejected microphone.
-    pub(super) audio_error: Option<String>,
 }
 
 impl Lane {
@@ -89,7 +87,6 @@ impl Lane {
             overlay_dismissed: false,
             last_end_reason: None,
             paused: false,
-            audio_error: None,
         }
     }
 }
@@ -141,8 +138,6 @@ pub struct MeetingView {
     pub countdown_ms: i64,
     /// True while capture/ASR is paused; meeting interval stays open (not ended).
     pub paused: bool,
-    /// Capture failure shown by meeting UI while typed notes remain available.
-    pub audio_error: Option<String>,
 }
 
 pub(super) fn view(lane: &Lane, now: i64) -> MeetingView {
@@ -160,7 +155,6 @@ pub(super) fn view(lane: &Lane, now: i64) -> MeetingView {
             0
         },
         paused: state == State::Recording && lane.paused,
-        audio_error: lane.audio_error.clone(),
     }
 }
 
@@ -179,7 +173,6 @@ pub(super) fn apply(
                     lane.overlay_dismissed = false;
                     lane.last_end_reason = None;
                     lane.paused = false;
-                    lane.audio_error = None;
                 }
                 if *state == State::Offered {
                     // The only UI that starts recording if it is ignored, so it is worth a
@@ -216,24 +209,13 @@ pub(super) fn apply(
             // meeting still records notes (FR-MT-13, OPEN-07/08).
             Effect::StartAudio => {
                 if let Some(id) = lane.session_id {
-                    // MCP/CLI/REST writes share `meeting.json`. Refresh only this next-session
-                    // choice; an API client must not silently toggle the feature mid-meeting.
-                    lane.settings.microphone =
-                        shogun_core::meeting::settings_store::load().microphone;
                     lane.overlay_dismissed = false;
                     lane.paused = false;
-                    lane.audio_error = None;
                     set_live_emit_session(id);
                     if let Ok(mut live) = lane.live_settings.write() {
                         *live = lane.settings.clone();
                     }
-                    match crate::audio_lane::start(app, id, lane.live_settings.clone()) {
-                        Ok(handle) => lane.audio = Some(handle),
-                        Err(error) => {
-                            eprintln!("[meeting] {error}; typed notes only");
-                            lane.audio_error = Some(error);
-                        }
-                    }
+                    lane.audio = crate::audio_lane::start(app, id, lane.live_settings.clone());
                 }
             }
             Effect::StopAudio => {

@@ -2,7 +2,7 @@
 //! whole command grammar is unit-testable without spawning a process. Dependency-free (no clap):
 //! the grammar is small and the tests are the spec.
 
-use crate::command::{Command, ConfigAction, ListOrGet, MeetingMicrophoneCommand, VoiceDictionaryCommand};
+use crate::command::{Command, ConfigAction, ListOrGet, VoiceDictionaryCommand};
 
 /// A fully parsed invocation: the command plus global flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,28 +211,6 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
                 command: "voice-dictionary",
                 got: other.to_string(),
             }),
-        },
-        "meeting" => match (rest.first().map(String::as_str), rest.get(1).map(String::as_str), rest.get(2)) {
-            (Some("microphone"), None | Some("show"), None) => {
-                Ok(Command::MeetingMicrophone(MeetingMicrophoneCommand::Show))
-            }
-            (Some("microphone"), Some("default"), None) => Ok(Command::MeetingMicrophone(
-                MeetingMicrophoneCommand::Set { microphone: None },
-            )),
-            (Some("microphone"), Some("set"), _) => Ok(Command::MeetingMicrophone(
-                MeetingMicrophoneCommand::Set {
-                    microphone: Some(join(&rest[2..]).ok_or(CliError::MissingArgument("<name>"))?),
-                },
-            )),
-            (Some("microphone"), Some(other), _) => Err(CliError::UnknownSubcommand {
-                command: "meeting microphone",
-                got: other.to_string(),
-            }),
-            (Some(other), _, _) => Err(CliError::UnknownSubcommand {
-                command: "meeting",
-                got: other.to_string(),
-            }),
-            (None, _, _) => Err(CliError::MissingArgument("microphone")),
         },
         "config" => {
             let action = match rest.first().map(String::as_str) {
@@ -690,23 +668,5 @@ mod tests {
                 got: "frobnicate".into()
             })
         );
-    }
-
-    #[test]
-    fn parses_meeting_microphone_commands() {
-        assert_eq!(
-            parse(&v(&["meeting", "microphone", "show"])).unwrap().command,
-            Command::MeetingMicrophone(MeetingMicrophoneCommand::Show)
-        );
-        assert_eq!(
-            parse(&v(&["meeting", "microphone", "set", "Studio", "Mic"]))
-                .unwrap()
-                .command,
-            Command::MeetingMicrophone(MeetingMicrophoneCommand::Set {
-                microphone: Some("Studio Mic".into()),
-            })
-        );
-        assert!(parse(&v(&["meeting", "microphone", "default", "typo"])).is_err());
-        assert!(parse(&v(&["meeting", "microphone", "show", "typo"])).is_err());
     }
 }
