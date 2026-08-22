@@ -59,6 +59,7 @@ pub fn run() {
             meeting::mac::meeting_set_overlay_canvas,
             meeting::mac::meeting_set_overlay_chat,
             meeting::mac::meeting_set_overlay_size,
+            meeting::mac::meeting_set_overlay_stealth,
             visual_recall::mac::get_visual_recall_settings,
             visual_recall::mac::set_visual_recall_enabled,
             visual_recall::mac::set_visual_recall_retention,

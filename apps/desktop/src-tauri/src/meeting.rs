@@ -102,6 +102,11 @@ pub mod mac {
         overlay::meeting_set_overlay_size(app, width, height, label);
     }
 
+    #[tauri::command]
+    pub fn meeting_set_overlay_stealth(app: tauri::AppHandle, enabled: bool) {
+        overlay::meeting_set_overlay_stealth(app, enabled);
+    }
+
     /// "Start" during the grace (FR-MT-08).
     #[tauri::command]
     pub fn meeting_start(app: tauri::AppHandle) {

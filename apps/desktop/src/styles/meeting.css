@@ -376,7 +376,7 @@
   pointer-events: auto;
 }
 /* More is a separate floating card, not an extension of the control pill. */
-.ov--live-pill:has(.ov__moremenu) {
+.ov--live-pill.is-more-open {
   padding-top: 8px;
 }
 /* Wrap = black pill only in flow. Grip is absolute — cannot push icons. */
@@ -586,7 +586,7 @@
   opacity: 1;
   visibility: visible;
 }
-.ov__bar-slot--more:has(.ov__modemenu, .ov__moremenu) > .ov__bar-tip {
+.ov__bar-slot--more:has(.ov__bar-btn[aria-expanded="true"]) > .ov__bar-tip {
   opacity: 0;
   visibility: hidden;
 }
@@ -780,15 +780,17 @@
   z-index: 30;
   width: 320px;
   box-sizing: border-box;
+  max-height: calc(100% - 100px);
   padding: 8px 0;
+  overflow-y: auto;
   transform: translateX(-50%);
   color: #fff;
-  background: rgba(31, 31, 33, 0.98);
+  background: rgba(6, 6, 8, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 16px;
+  border-radius: 18px;
   box-shadow: none;
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  backdrop-filter: blur(40px) saturate(1.45);
+  -webkit-backdrop-filter: blur(40px) saturate(1.45);
 }
 .ov__more-stealth,
 .ov__more-opacity,
@@ -853,14 +855,44 @@
 .ov__more-switch.is-on span { transform: translateX(14px); background: #171719; }
 .ov__more-opacity {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 .ov__more-label {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.ov__more-opacity input { width: 100%; accent-color: #fff; }
+.ov__more-label strong {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ov__more-opacity input {
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.ov__more-opacity input::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, rgba(255, 255, 255, 0.92) 0 var(--ov-opacity), rgba(255, 255, 255, 0.2) var(--ov-opacity) 100%);
+}
+.ov__more-opacity input::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 2px solid rgba(6, 6, 8, 0.9);
+  border-radius: 50%;
+  background: #fff;
+}
 .ov__more-rule {
   height: 1px;
   margin: 3px 0;
@@ -895,6 +927,31 @@
   font-weight: 400;
   line-height: 1;
 }
+.ov__more-picker {
+  margin: 0 10px 5px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ov__more-picker-row {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.78);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.ov__more-picker-row:hover:not(:disabled),
+.ov__more-picker-row.is-on { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.ov__more-picker-row:disabled { cursor: default; opacity: 0.46; }
+.ov__more-picker-error { margin: 5px 8px 3px; color: #f0a4a4; font-size: 11px; }
 .ov__more-back {
   width: 100%;
   padding: 7px 14px;
