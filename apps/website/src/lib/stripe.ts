@@ -55,6 +55,14 @@ export function automaticTaxEnabled(): boolean {
  * The shared client. Re-created only when the key changes (so a rotated key takes effect without
  * a cold start). `apiVersion` is deliberately left at the SDK default: pinning it here and in the
  * dashboard separately is how period fields silently go missing.
+ *
+ * **`httpClient` is not optional here.** The SDK's default sender is built on Node's `https`
+ * module, which this site does not run on: it is deployed to Cloudflare Workers, where that
+ * module only exists as a `nodejs_compat` shim over the runtime's socket layer. Every call went
+ * out through it and came back `StripeConnectionError: An error occurred with our connection to
+ * Stripe. Request was retried 2 times.` — the retries below, exhausted — so no Checkout Session
+ * was ever created, in either mode. The fetch client uses the runtime's own `fetch` and needs no
+ * shim.
  */
 export function stripe(): Stripe {
   const key = stripeSecretKey();
@@ -65,10 +73,23 @@ export function stripe(): Stripe {
       client: new Stripe(key, {
         appInfo: { name: 'ShogunAI', url: 'https://syogun.com' },
         maxNetworkRetries: 2,
+        httpClient: Stripe.createFetchHttpClient(),
       }),
     };
   }
   return cached.client;
+}
+
+/**
+ * Signature verification for the webhook, likewise on the runtime's own primitives.
+ *
+ * `constructEventAsync` falls back to a Node `crypto` provider when it is not given one, which is
+ * the same shim problem in a place with worse consequences: a webhook that cannot verify is a
+ * payment we never record. WebCrypto is native here, and the async form exists precisely so this
+ * provider can be used.
+ */
+export function webhookCryptoProvider(): Stripe.CryptoProvider {
+  return Stripe.createSubtleCryptoProvider();
 }
 
 /**

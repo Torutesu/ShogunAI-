@@ -16,7 +16,7 @@ import {
   isValidClaimNonce,
   licenseKeyFingerprint,
 } from '@/lib/license';
-import { stripe, stripeSecretKey, webhookSecret } from '@/lib/stripe';
+import { stripe, stripeSecretKey, webhookCryptoProvider, webhookSecret } from '@/lib/stripe';
 
 export const runtime = 'nodejs';
 /** The signature covers the raw bytes — no body parsing, no caching, no edge runtime. */
@@ -107,7 +107,13 @@ export async function POST(req: Request) {
   const raw = await req.text();
   let event: Stripe.Event;
   try {
-    event = await stripe().webhooks.constructEventAsync(raw, signature, secret);
+    event = await stripe().webhooks.constructEventAsync(
+      raw,
+      signature,
+      secret,
+      undefined,
+      webhookCryptoProvider(),
+    );
   } catch (e) {
     console.error('webhook: signature verification failed:', e instanceof Error ? e.message : e);
     return NextResponse.json({ ok: false, error: 'bad_request' }, { status: 400 });
