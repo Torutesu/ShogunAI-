@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use memory_bench::config::{
     BenchConfig, DEFAULT_EVENTS, DEFAULT_K, DEFAULT_QUERIES, DEFAULT_WARMUP, DEFAULT_WRITE_BATCH,
 };
-use memory_bench::{report, runner, workloads};
+use memory_bench::{report, runner};
 
 const USAGE: &str = "\
 memory-bench — SHOGUN memory ingestion and retrieval benchmark
@@ -30,22 +30,25 @@ OPTIONS:
     --k <N>             Results requested per query. Default: 10
     --warmup <N>        Unmeasured queries before measurement. Default: 20
     --seed <N>          Workload seed. Default: 42. Same seed = same corpus, forever.
-    --db <PATH>         SQLite file to use. Default: in-memory.
+    --db <PATH>         Private SQLite scratch directory to create. Default: in-memory.
+                        PATH must NOT exist. The benchmark claims that directory atomically and
+                        creates memory-bench.sqlite plus WAL/SHM inside it. It never opens PATH as
+                        a database, reuses a directory, or resets caller-owned storage.
                         Quote latency numbers only from a file-backed run — in-memory writes
                         never touch a filesystem and skip fsync entirely.
     --out <DIR>         Write the JSON report into DIR. Default: print the summary only.
-    --write-batch <N>   Events per bulk-load transaction. Default: 1000. Use 1 to measure the
-                        true per-capture write cost including commit.
+    --write-batch <N>   Events per bulk-load transaction, at least 1. Default: 1000. Use 1 to
+                        measure the true per-capture write cost including commit.
     -h, --help          Show this help.
 
 REPRODUCIBILITY:
-    A result is defined by (workload, seed, events, queries) plus the commit and build profile,
-    all of which are recorded in the report. Compare runs only across matching modes: a debug
-    build, an in-memory database, or a lexical-only retrieval path each disqualify a run from
-    certifying an SLO, and the report marks it.
+    A result is defined by every runtime knob plus storage/retrieval mode, commit, and build
+    profile, all of which are recorded. Compare only matching modes. Debug, in-memory, or
+    lexical-only runs cannot certify an SLO. Dirty, unknown-provenance, failed, or undersampled
+    runs are invalid for automated comparison.
 
 EXAMPLES:
-    memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/b.db --out reports
+    memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/bench-run --out reports
     memory-bench --workload duplicate --events 10000 --queries 200
     memory-bench --workload temporal --events 50000 --queries 12
 ";
@@ -71,20 +74,16 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
         if flag == "-h" || flag == "--help" {
             return Ok(None);
         }
-        let value = args.get(i + 1).ok_or_else(|| format!("{flag} needs a value"))?;
+        let value = args
+            .get(i + 1)
+            .ok_or_else(|| format!("{flag} needs a value"))?;
         let num = |what: &str| -> Result<usize, String> {
-            value.parse::<usize>().map_err(|_| format!("{what} must be a number, got {value:?}"))
+            value
+                .parse::<usize>()
+                .map_err(|_| format!("{what} must be a number, got {value:?}"))
         };
         match flag {
-            "--workload" => {
-                if workloads::by_name(value).is_none() {
-                    return Err(format!(
-                        "unknown workload {value:?} (valid: {})",
-                        workloads::ALL.join(", ")
-                    ));
-                }
-                cfg.workload = value.clone();
-            }
+            "--workload" => cfg.workload = value.clone(),
             "--events" => cfg.events = num("--events")?,
             "--queries" => cfg.queries = num("--queries")?,
             "--k" => cfg.k = num("--k")?,
@@ -102,9 +101,7 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
         i += 2;
     }
 
-    if cfg.events == 0 {
-        return Err("--events must be greater than zero".to_string());
-    }
+    cfg.validate().map_err(|error| error.to_string())?;
     Ok(Some(cfg))
 }
 
@@ -165,9 +162,16 @@ mod tests {
 
     #[test]
     fn flags_are_applied() {
-        let cfg = parse(&args(&["--workload", "duplicate", "--events", "10", "--seed", "7"]))
-            .expect("parse")
-            .expect("config");
+        let cfg = parse(&args(&[
+            "--workload",
+            "duplicate",
+            "--events",
+            "10",
+            "--seed",
+            "7",
+        ]))
+        .expect("parse")
+        .expect("config");
         assert_eq!(cfg.workload, "duplicate");
         assert_eq!(cfg.events, 10);
         assert_eq!(cfg.seed, 7);
@@ -194,5 +198,36 @@ mod tests {
     #[test]
     fn zero_events_is_rejected() {
         assert!(parse(&args(&["--events", "0"])).is_err());
+    }
+
+    #[test]
+    fn out_of_bounds_numbers_are_rejected_with_the_limit_named() {
+        // Issue #221: agent-generated values can be absurd; the error names the accepted range.
+        let above_limit = (memory_bench::config::MAX_EVENTS + 1).to_string();
+        let err = parse(&["--events".to_string(), above_limit]).expect_err("too many events");
+        assert!(
+            err.contains(&format!(
+                "between 1 and {}",
+                memory_bench::config::MAX_EVENTS
+            )),
+            "{err}"
+        );
+        assert!(parse(&args(&["--queries", "0"])).is_err());
+        assert!(parse(&args(&["--queries", "1000001"])).is_err());
+        assert!(parse(&args(&["--k", "0"])).is_err());
+        assert!(parse(&args(&["--k", "1001"])).is_err());
+        assert!(parse(&args(&["--warmup", "100001"])).is_err());
+    }
+
+    #[test]
+    fn write_batch_zero_is_rejected_not_silently_clamped() {
+        // Issue #221: execution used to clamp 0 to 1 while the report recorded 0 — the label and
+        // the experiment disagreed. Now the value that parses is the value that runs.
+        let err = parse(&args(&["--write-batch", "0"])).expect_err("reject zero");
+        assert!(err.contains("--write-batch"), "{err}");
+        let cfg = parse(&args(&["--write-batch", "1"]))
+            .expect("parse")
+            .expect("config");
+        assert_eq!(cfg.write_batch, 1);
     }
 }

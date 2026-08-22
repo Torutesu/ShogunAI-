@@ -49,13 +49,19 @@ pub fn read_usage() -> Option<Usage> {
         .find_map(|l| l.strip_prefix("VmRSS:"))
         .and_then(|v| v.split_whitespace().next()?.parse().ok())?;
 
-    Some(Usage { cpu_ns, rss_bytes: rss_kb.saturating_mul(1024) })
+    Some(Usage {
+        cpu_ns,
+        rss_bytes: rss_kb.saturating_mul(1024),
+    })
 }
 
 #[cfg(target_os = "macos")]
 pub fn read_usage() -> Option<Usage> {
     let u = spike_harness::cpu::read_process_usage().ok()?;
-    Some(Usage { cpu_ns: u.cpu_ns, rss_bytes: u.rss_bytes })
+    Some(Usage {
+        cpu_ns: u.cpu_ns,
+        rss_bytes: u.rss_bytes,
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -72,6 +78,12 @@ pub fn read_usage() -> Option<Usage> {
 pub struct ResourceTracker {
     meter: CpuMeter,
     cpu_samples: Vec<f64>,
+    /// First and latest cumulative `(cpu_ns, wall_ns)` reading. The mean is computed from these
+    /// endpoints — total CPU over total wall — so a one-millisecond interval no longer gets the
+    /// same vote as a one-second one (issue #221). The per-interval `cpu_samples` remain what the
+    /// peak is read from.
+    first_cumulative: Option<(u64, u64)>,
+    last_cumulative: Option<(u64, u64)>,
     peak_rss_bytes: u64,
     initial_rss_bytes: Option<u64>,
     supported: bool,
@@ -95,6 +107,10 @@ impl ResourceTracker {
         if self.initial_rss_bytes.is_none() {
             self.initial_rss_bytes = Some(usage.rss_bytes);
         }
+        if self.first_cumulative.is_none() {
+            self.first_cumulative = Some((usage.cpu_ns, wall_ns));
+        }
+        self.last_cumulative = Some((usage.cpu_ns, wall_ns));
         if let Some(pct) = self.meter.sample(usage.cpu_ns, wall_ns) {
             self.cpu_samples.push(pct);
         }
@@ -106,16 +122,21 @@ impl ResourceTracker {
         if !self.supported {
             return None;
         }
-        let mean_cpu_pct = if self.cpu_samples.is_empty() {
-            None
-        } else {
-            Some(self.cpu_samples.iter().sum::<f64>() / self.cpu_samples.len() as f64)
+        // Duration-weighted by construction: ΔCPU over ΔWALL between the first and last reading
+        // is the average utilisation of the whole window, however unevenly it was sampled.
+        let mean_cpu_pct = match (self.first_cumulative, self.last_cumulative) {
+            (Some((cpu0, wall0)), Some((cpu1, wall1))) if wall1 > wall0 => {
+                Some((cpu1.saturating_sub(cpu0)) as f64 / (wall1 - wall0) as f64 * 100.0)
+            }
+            _ => None,
         };
         let peak_cpu_pct = self
             .cpu_samples
             .iter()
             .copied()
-            .fold(None, |acc: Option<f64>, x| Some(acc.map_or(x, |a: f64| a.max(x))));
+            .fold(None, |acc: Option<f64>, x| {
+                Some(acc.map_or(x, |a: f64| a.max(x)))
+            });
         Some(ResourceSummary {
             samples: self.samples_taken,
             cpu_samples: self.cpu_samples.len(),
@@ -129,9 +150,11 @@ impl ResourceTracker {
 
 /// Serializable resource summary.
 ///
-/// `mean_cpu_pct` is an average over the benchmark's own measurement window and nothing else —
-/// it is not an idle-CPU figure and must never be compared against
-/// [`spike_harness::slo::IDLE_CPU_PCT`], which is defined over a 1-minute idle window.
+/// `mean_cpu_pct` is total CPU time over total wall time between the first and last reading —
+/// duration-weighted, unlike a plain average of per-interval percentages. It covers the
+/// benchmark's own measurement window and nothing else: it is not an idle-CPU figure and must
+/// never be compared against [`spike_harness::slo::IDLE_CPU_PCT`], which is defined over a
+/// 1-minute idle window.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct ResourceSummary {
     pub samples: u64,
@@ -162,7 +185,10 @@ mod tests {
         t.sample(2_000_000_000);
         let s = t.summary().expect("platform has a reader");
         assert!(s.samples >= 2);
-        assert!(s.peak_rss_bytes > 0, "a running process has resident memory");
+        assert!(
+            s.peak_rss_bytes > 0,
+            "a running process has resident memory"
+        );
     }
 
     #[test]

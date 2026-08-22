@@ -5,6 +5,8 @@
 //! lets a later intervention be measured by exactly this code.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use spike_harness::MonoClock;
@@ -12,15 +14,26 @@ use spike_harness::MonoClock;
 use crate::backend::{MemoryBackend, ShogunBackend};
 use crate::config::BenchConfig;
 use crate::metrics::{LatencySeries, LatencySummary, QualityAccumulator, WriteStats};
-use crate::report::{BenchReport, Environment, RunMode, StorageReport, BENCHMARK_NAME, REPORT_VERSION};
+use crate::report::{
+    BenchReport, Environment, RunMode, StorageReport, BENCHMARK_NAME, REPORT_VERSION,
+};
 use crate::resources::ResourceTracker;
 use crate::rng::Rng;
 use crate::workloads;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
-    #[error("unknown workload {0:?} (valid: {})", crate::workloads::ALL.join(", "))]
-    UnknownWorkload(String),
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
+    #[error("generated {workload:?} workload is invalid: {reason}")]
+    InvalidGeneratedWorkload { workload: String, reason: String },
+    #[error(
+        "--db {0:?} already exists — refusing to touch it. The benchmark requires a new disposable \
+         scratch directory that it can claim atomically; it creates memory-bench.sqlite and all \
+         sidecars inside that directory. Pass a path that does not exist yet, or omit --db for an \
+         in-memory run."
+    )]
+    DbPathExists(String),
     #[error(transparent)]
     Backend(#[from] crate::backend::BackendError),
     #[error("io: {0}")]
@@ -38,23 +51,31 @@ const RESOURCE_SAMPLE_EVERY: usize = 500;
 /// `write_report` is separate ([`persist`]) so a test can run a benchmark without touching the
 /// filesystem.
 pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
-    let workload = workloads::by_name(&config.workload)
-        .ok_or_else(|| RunError::UnknownWorkload(config.workload.clone()))?;
+    config.validate()?;
+    let workload =
+        workloads::by_name(&config.workload).ok_or_else(|| RunError::InvalidGeneratedWorkload {
+            workload: config.workload.clone(),
+            reason: "validated workload could not be resolved".to_string(),
+        })?;
 
     // 1. Seed and generate. The corpus exists in full before the backend is even opened, so
     //    generation cost can never leak into a write-latency measurement.
     let mut rng = Rng::new(config.seed);
     let generated = workload.generate(&mut rng, config.events, config.queries);
+    validate_generated_workload(config, &generated)?;
 
     let clock = MonoClock::new();
     let mut resources = ResourceTracker::new();
     resources.sample(clock.elapsed_ns());
 
-    // 2. Open a fresh store. Fresh, never cleared: a `DELETE FROM` leaves the file at its high
-    //    water mark and freelist pages would make the storage numbers meaningless.
+    // 2. Open a fresh store. The caller's path is claimed as a directory in one atomic operation;
+    //    SQLite only sees a child path inside that directory. There is no check/open gap in which
+    //    another process can place a personal DB where the benchmark is about to migrate and write.
+    //    Fresh also means never cleared: a `DELETE FROM` leaves high-water and freelist pages that
+    //    would make storage numbers meaningless.
     let in_memory = config.db_path.is_none();
     let mut backend = match &config.db_path {
-        Some(p) => ShogunBackend::open(p)?,
+        Some(p) => ShogunBackend::open(claim_scratch_db(p)?)?,
         None => ShogunBackend::in_memory()?,
     };
     let initial_size = backend.size()?;
@@ -65,13 +86,15 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     let mut writes = WriteStats {
         submitted: 0,
         deduplicated: 0,
+        wrong_merges: 0,
         failed: 0,
         rows_after: 0,
         unique_facts: generated.unique_facts() as u64,
         duplicate_events: generated.duplicate_events() as u64,
     };
 
-    let batch = config.write_batch.max(1);
+    // Central config validation rejects zero for CLI and direct library callers alike.
+    let batch = config.write_batch;
     let mut open_batch = false;
     for (i, ev) in generated.events.iter().enumerate() {
         if i % batch == 0 {
@@ -90,10 +113,20 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
                 write_latency.record_ns(elapsed.as_nanos() as u64);
                 if o.deduplicated {
                     writes.deduplicated += 1;
+                    // The workload knows which fact this event carries and the first writer of a
+                    // row owns the mapping, so every reported merge is checkable: a merge onto a
+                    // row holding a different fact destroyed information, and must be counted
+                    // against the backend rather than into its collapse rate (issue #221).
+                    if fact_of.get(&o.event_id) != Some(&ev.fact_id) {
+                        writes.wrong_merges += 1;
+                    }
                 }
-                // First writer of a row owns the mapping. A duplicate resolves to the same row and
-                // carries the same fact, so re-inserting would be a no-op either way.
-                fact_of.entry(o.event_id).or_insert_with(|| ev.fact_id.clone());
+                // First writer of a row owns the mapping. A correct duplicate resolves to the same
+                // row and carries the same fact, so re-inserting would be a no-op; a wrong merge
+                // keeps the original owner, which is the fact the row's text actually carries.
+                fact_of
+                    .entry(o.event_id)
+                    .or_insert_with(|| ev.fact_id.clone());
             }
             // A failed write's latency is not a write latency; counting it would let an error path
             // that fails instantly flatter the p95.
@@ -140,6 +173,7 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     resources.sample(clock.elapsed_ns());
     let final_size = backend.size()?;
     let query_summary = LatencySummary::of(&query_latency);
+    let quality = quality.summary(config.k);
     let mode = RunMode {
         // v0.1 measures the lexical half only. The backend passes no query embedding, so RRF fuses
         // one list and hybrid search degenerates to FTS. Wiring the ONNX embedder in (it needs a
@@ -150,21 +184,33 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         in_memory,
     };
     let environment = Environment::detect();
-    let slo = BenchReport::slo_for(query_summary, mode, environment.profile);
+    let validity = crate::report::MeasurementValidity::assess(
+        &writes,
+        &quality,
+        &environment,
+        &config.workload,
+    );
+    let slo = BenchReport::slo_for(query_summary, mode, environment.profile, validity.valid);
 
     Ok(BenchReport {
         benchmark: BENCHMARK_NAME,
         version: REPORT_VERSION,
         config: config.clone(),
+        // What the generator actually produced. A workload can plan fewer queries than were asked
+        // for (`clean` plants at most one per event), and a report that only echoed the request
+        // would overstate the run (issue #221).
+        generated_events: generated.events.len(),
+        generated_queries: generated.queries.len(),
         environment,
         mode,
         backend: backend.name(),
+        validity,
         write_amplification: writes.write_amplification(),
         duplicate_collapse_rate: writes.duplicate_collapse_rate(),
         writes,
         write_latency: LatencySummary::of(&write_latency),
         query_latency: query_summary,
-        quality: quality.summary(),
+        quality,
         resources: resources.summary(),
         storage: StorageReport {
             initial_logical_bytes: initial_size.logical_bytes,
@@ -178,17 +224,123 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     })
 }
 
+fn validate_generated_workload(
+    config: &BenchConfig,
+    generated: &crate::workload::GeneratedWorkload,
+) -> Result<(), RunError> {
+    if generated.events.len() != config.events {
+        return Err(RunError::InvalidGeneratedWorkload {
+            workload: config.workload.clone(),
+            reason: format!(
+                "requested {} events but generator produced {}",
+                config.events,
+                generated.events.len()
+            ),
+        });
+    }
+    if generated.queries.is_empty() {
+        return Err(RunError::InvalidGeneratedWorkload {
+            workload: config.workload.clone(),
+            reason: "generator produced no queries".to_string(),
+        });
+    }
+    if config.workload == "temporal" {
+        let expected_queries = config
+            .queries
+            .min(crate::workloads::temporal_project_count());
+        if generated.queries.len() != expected_queries
+            || generated
+                .queries
+                .iter()
+                .any(|query| query.superseded.is_empty())
+        {
+            return Err(RunError::InvalidGeneratedWorkload {
+                workload: config.workload.clone(),
+                reason: format!(
+                    "expected {expected_queries} queries with superseded history, got {} total",
+                    generated.queries.len()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Atomically claim the entire namespace SQLite will use.
+///
+/// A file-level `exists()` check followed by SQLite open is unsafe: another process can put a DB
+/// at the path between those operations. Directory creation has create-new semantics, and keeping
+/// DB/WAL/SHM beneath the owned directory avoids a second race across sidecar names.
+fn claim_scratch_db(path: &str) -> Result<PathBuf, RunError> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(path) {
+        Ok(()) => Ok(std::path::Path::new(path).join("memory-bench.sqlite")),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(RunError::DbPathExists(path.to_string()))
+        }
+        Err(error) => Err(RunError::Io(error)),
+    }
+}
+
 /// Write the report under `out_dir` and return the file path.
 ///
-/// The filename carries workload, scale and seed so a directory of results is readable without
-/// opening any of them, and two different runs never overwrite each other.
+/// The filename carries every result-changing runtime knob and mode needed to distinguish nearby
+/// runs. Existing artifacts are never opened for writing: a repeated run gets an atomic `-runN`
+/// suffix instead.
 pub fn persist(report: &BenchReport, out_dir: &str) -> Result<std::path::PathBuf, RunError> {
+    report.config.validate()?;
     std::fs::create_dir_all(out_dir)?;
-    let name = format!(
-        "{}-{}e-{}q-seed{}.json",
-        report.config.workload, report.config.events, report.config.queries, report.config.seed
+    let storage = if report.mode.in_memory {
+        "memory"
+    } else {
+        "disk"
+    };
+    let retrieval = if report.mode.semantic {
+        "hybrid"
+    } else {
+        "lexical"
+    };
+    let stem = format!(
+        "{}-{}e-{}q-k{}-warm{}-batch{}-seed{}-{storage}-{retrieval}",
+        report.config.workload,
+        report.config.events,
+        report.config.queries,
+        report.config.k,
+        report.config.warmup,
+        report.config.write_batch,
+        report.config.seed,
     );
-    let path = std::path::Path::new(out_dir).join(name);
-    std::fs::write(&path, report.to_json()?)?;
-    Ok(path)
+    let json = report.to_json()?;
+
+    for attempt in 0..10_000usize {
+        let name = if attempt == 0 {
+            format!("{stem}.json")
+        } else {
+            format!("{stem}-run{}.json", attempt + 1)
+        };
+        let path = std::path::Path::new(out_dir).join(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(json.as_bytes())?;
+                file.sync_all()?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(RunError::Io(error)),
+        }
+    }
+
+    Err(RunError::Io(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("report namespace exhausted for {stem:?} under {out_dir:?}"),
+    )))
 }

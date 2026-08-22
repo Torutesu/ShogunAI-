@@ -55,12 +55,15 @@ impl LatencySeries {
     }
 
     pub fn min_ms(&self) -> Option<f64> {
-        self.samples_ms.iter().copied().fold(None, |acc: Option<f64>, x| {
-            Some(match acc {
-                Some(a) => a.min(x),
-                None => x,
+        self.samples_ms
+            .iter()
+            .copied()
+            .fold(None, |acc: Option<f64>, x| {
+                Some(match acc {
+                    Some(a) => a.min(x),
+                    None => x,
+                })
             })
-        })
     }
 }
 
@@ -99,6 +102,11 @@ pub struct WriteStats {
     pub submitted: u64,
     /// Writes the backend absorbed into an existing row.
     pub deduplicated: u64,
+    /// Merges that landed on a row carrying a *different* fact — information destroyed, not
+    /// deduplicated (issue #221). The workload knows which fact each event carries, so the runner
+    /// can check every reported merge against the row's owner. Always 0 for an honest backend;
+    /// any non-zero value disqualifies the collapse rate as a score.
+    pub wrong_merges: u64,
     /// Writes that returned an error.
     pub failed: u64,
     /// Rows in the log afterwards.
@@ -110,6 +118,11 @@ pub struct WriteStats {
 }
 
 impl WriteStats {
+    /// Whether write-derived improvement scores are safe to compare.
+    pub fn valid_for_improvement(&self) -> bool {
+        self.wrong_merges == 0 && self.failed == 0
+    }
+
     /// Rows held per distinct fact. 1.0 is perfect; 2.0 means the store is twice the size the
     /// information in it requires.
     ///
@@ -117,18 +130,24 @@ impl WriteStats {
     /// from `rows_after` (what the database really holds) rather than from the number of writes
     /// we submitted.
     pub fn write_amplification(&self) -> Option<f64> {
-        if self.unique_facts == 0 {
+        if self.unique_facts == 0 || !self.valid_for_improvement() {
             return None;
         }
         Some(self.rows_after as f64 / self.unique_facts as f64)
     }
 
-    /// Of the repeats the workload contained, the share the backend recognised.
+    /// Of the repeats the workload contained, the share the backend recognised **correctly**.
+    ///
+    /// Only merges onto a row carrying the same fact count. A backend that combined two different
+    /// memories would otherwise be rewarded for destroying information (issue #221): collapsing
+    /// "Mom likes tea" into "Mom is allergic to tea" must never raise this number. Wrong merges
+    /// disqualify the score entirely. Subtracting them is insufficient: destructive merging also
+    /// shrinks `rows_after`, so publishing either write score would still reward data loss.
     ///
     /// `None` when the workload contained no repeats — in a clean corpus this metric has no
     /// denominator, and reporting 0% would suggest a failure where there was nothing to detect.
     pub fn duplicate_collapse_rate(&self) -> Option<f64> {
-        if self.duplicate_events == 0 {
+        if self.duplicate_events == 0 || !self.valid_for_improvement() {
             return None;
         }
         Some(self.deduplicated as f64 / self.duplicate_events as f64)
@@ -194,6 +213,9 @@ impl QualityAccumulator {
 
     pub fn record_failure(&mut self) {
         self.failed += 1;
+        // A failed query is a measured miss, not an absent sample. Omitting it from the denominator
+        // would let a backend fail hard queries and inflate recall/MRR with only easy successes.
+        self.first_correct_rank.push(None);
     }
 
     pub fn queries(&self) -> usize {
@@ -226,13 +248,20 @@ impl QualityAccumulator {
         Some(total / self.first_correct_rank.len() as f64)
     }
 
-    pub fn summary(&self) -> QualitySummary {
+    /// Summarise, given the `k` results each query actually requested.
+    ///
+    /// A recall@k the run never measured is `None`, not a relabeled smaller recall: with `--k 1`
+    /// the returned lists are one row long, so "recall@5" would be recall@1 wearing the wrong
+    /// name (issue #221).
+    pub fn summary(&self, retrieval_k: usize) -> QualitySummary {
+        let recall_if_measured =
+            |k: usize| -> Option<f64> { (retrieval_k >= k).then(|| self.recall_at(k)).flatten() };
         QualitySummary {
             queries: self.queries(),
             failed: self.failed,
-            recall_at_1: self.recall_at(1),
-            recall_at_5: self.recall_at(5),
-            recall_at_10: self.recall_at(10),
+            recall_at_1: recall_if_measured(1),
+            recall_at_5: recall_if_measured(5),
+            recall_at_10: recall_if_measured(10),
             mrr: self.mrr(),
             temporal_queries: self.temporal_queries,
             stale_returned: self.stale_returned,
@@ -295,7 +324,11 @@ mod tests {
 
     #[test]
     fn write_amplification_is_rows_over_facts() {
-        let w = WriteStats { rows_after: 1500, unique_facts: 1000, ..Default::default() };
+        let w = WriteStats {
+            rows_after: 1500,
+            unique_facts: 1000,
+            ..Default::default()
+        };
         assert_eq!(w.write_amplification(), Some(1.5));
     }
 
@@ -307,8 +340,59 @@ mod tests {
     }
 
     #[test]
+    fn wrong_merges_disqualify_all_write_improvement_scores() {
+        // Issue #221: a backend that combines two *different* memories destroys information and
+        // must not receive a score derived from the smaller, damaged database.
+        let w = WriteStats {
+            deduplicated: 150,
+            wrong_merges: 100,
+            rows_after: 200,
+            unique_facts: 1_000,
+            duplicate_events: 300,
+            ..Default::default()
+        };
+        assert!(!w.valid_for_improvement());
+        assert!(w.write_amplification().is_none());
+        assert!(w.duplicate_collapse_rate().is_none());
+    }
+
+    #[test]
+    fn failed_writes_disqualify_write_improvement_scores() {
+        let w = WriteStats {
+            failed: 1,
+            rows_after: 299,
+            unique_facts: 300,
+            duplicate_events: 300,
+            ..Default::default()
+        };
+        assert!(w.write_amplification().is_none());
+        assert!(w.duplicate_collapse_rate().is_none());
+    }
+
+    #[test]
+    fn recall_at_k_never_measured_is_null_not_a_relabel() {
+        // Issue #221: with --k 1 the returned lists are one row long, so "recall@5" would just be
+        // recall@1 wearing the wrong name. It must come back None.
+        let mut q = QualityAccumulator::new();
+        let mut fact_of = HashMap::new();
+        fact_of.insert(1_i64, "f-a".to_string());
+        q.record(&[1], &fact_of, &["f-a".to_string()], &[]);
+        let s = q.summary(1);
+        assert_eq!(s.recall_at_1, Some(1.0));
+        assert!(s.recall_at_5.is_none(), "k=1 never measured the top five");
+        assert!(s.recall_at_10.is_none(), "k=1 never measured the top ten");
+        let s = q.summary(5);
+        assert_eq!(s.recall_at_5, Some(1.0));
+        assert!(s.recall_at_10.is_none());
+    }
+
+    #[test]
     fn collapse_rate_counts_recognised_repeats() {
-        let w = WriteStats { deduplicated: 150, duplicate_events: 300, ..Default::default() };
+        let w = WriteStats {
+            deduplicated: 150,
+            duplicate_events: 300,
+            ..Default::default()
+        };
         assert_eq!(w.duplicate_collapse_rate(), Some(0.5));
     }
 
@@ -337,6 +421,19 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_query_stays_in_quality_denominators() {
+        let facts = fact_map(&[(1, "a")]);
+        let mut q = QualityAccumulator::new();
+        q.record(&[1], &facts, &["a".into()], &[]);
+        q.record_failure();
+        let summary = q.summary(10);
+        assert_eq!(summary.queries, 2);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.recall_at_1, Some(0.5));
+        assert_eq!(summary.mrr, Some(0.5));
+    }
+
+    #[test]
     fn stale_is_counted_separately_from_outranking() {
         let facts = fact_map(&[(1, "old"), (2, "new")]);
         let mut q = QualityAccumulator::new();
@@ -344,7 +441,7 @@ mod tests {
         q.record(&[2, 1], &facts, &["new".into()], &["old".into()]);
         // Stale first: actively wrong.
         q.record(&[1, 2], &facts, &["new".into()], &["old".into()]);
-        let s = q.summary();
+        let s = q.summary(10);
         assert_eq!(s.temporal_queries, 2);
         assert_eq!(s.stale_returned, 2);
         assert_eq!(s.stale_outranked_current, 1);
@@ -357,7 +454,7 @@ mod tests {
         let facts = fact_map(&[(1, "old")]);
         let mut q = QualityAccumulator::new();
         q.record(&[1], &facts, &["new".into()], &["old".into()]);
-        let s = q.summary();
+        let s = q.summary(10);
         assert_eq!(s.stale_outranked_current, 1);
     }
 
@@ -366,7 +463,7 @@ mod tests {
         let facts = fact_map(&[(1, "a")]);
         let mut q = QualityAccumulator::new();
         q.record(&[1], &facts, &["a".into()], &[]);
-        let s = q.summary();
+        let s = q.summary(10);
         assert_eq!(s.temporal_queries, 0);
         assert!(s.stale_rate.is_none());
     }

@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
-use shogun_memory::search::{SearchOptions, SearchDepth};
+use shogun_memory::search::{SearchDepth, SearchOptions};
 use shogun_memory::{event_log, search};
 
 use crate::workload::BenchEvent;
@@ -91,13 +91,19 @@ impl ShogunBackend {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, BackendError> {
         let path = path.as_ref().to_path_buf();
         let conn = shogun_memory::open(&path)?;
-        Ok(Self { conn, path: Some(path) })
+        Ok(Self {
+            conn,
+            path: Some(path),
+        })
     }
 
     /// In-memory database, for the CI smoke run where the point is that the pipeline works at all,
     /// not what it costs.
     pub fn in_memory() -> Result<Self, BackendError> {
-        Ok(Self { conn: shogun_memory::open_in_memory()?, path: None })
+        Ok(Self {
+            conn: shogun_memory::open_in_memory()?,
+            path: None,
+        })
     }
 
     /// Escape hatch for measurements that need the connection directly (the tier and cold-scan
@@ -131,7 +137,10 @@ impl MemoryBackend for ShogunBackend {
             window_bounds: None,
         };
         let (event_id, deduplicated) = event_log::insert_or_touch(&self.conn, &new)?;
-        Ok(WriteOutcome { event_id, deduplicated })
+        Ok(WriteOutcome {
+            event_id,
+            deduplicated,
+        })
     }
 
     fn search(&self, query: &str, k: usize) -> Result<Vec<i64>, BackendError> {
@@ -141,14 +150,20 @@ impl MemoryBackend for ShogunBackend {
         // The report records `semantic: false` so a lexical number is never mistaken for a hybrid
         // one; `retrieval_eval.rs` established that the gap between them is real (recall@5 0.93 vs
         // 1.00), so the two must never be compared to each other.
-        let opts = SearchOptions { since_ts: None, depth: SearchDepth::WarmOnly, ..Default::default() };
+        let opts = SearchOptions {
+            since_ts: None,
+            depth: SearchDepth::WarmOnly,
+            ..Default::default()
+        };
         let now_ms = 0; // Only consulted to decide whether a since_ts reaches into Cold; it cannot here.
         let result = search::search_hybrid_with_options(&self.conn, query, None, now_ms, &opts, k)?;
         Ok(result.hits.into_iter().map(|h| h.event_id).collect())
     }
 
     fn count(&self) -> Result<i64, BackendError> {
-        Ok(self.conn.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM event_log", [], |r| r.get(0))?)
     }
 
     fn size(&self) -> Result<StorageSize, BackendError> {
@@ -176,7 +191,10 @@ impl MemoryBackend for ShogunBackend {
             }
             None => None,
         };
-        Ok(StorageSize { logical_bytes, file_bytes })
+        Ok(StorageSize {
+            logical_bytes,
+            file_bytes,
+        })
     }
 
     fn begin_batch(&mut self) -> Result<(), BackendError> {

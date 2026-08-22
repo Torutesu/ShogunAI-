@@ -20,7 +20,9 @@ const PROJECTS: &[&str] = &[
     "tundra", "vantage", "willow", "zephyr",
 ];
 
-const PEOPLE: &[&str] = &["Priya", "Dana", "Marcus", "Yuki", "Ines", "Tobias", "Amara", "Rafael"];
+const PEOPLE: &[&str] = &[
+    "Priya", "Dana", "Marcus", "Yuki", "Ines", "Tobias", "Amara", "Rafael",
+];
 
 /// Apps a capture would plausibly come from, so `app_bundle_id` is not a constant column.
 const APPS: &[(&str, &str)] = &[
@@ -48,16 +50,34 @@ const CHATTER: &[&str] = &[
 
 /// The decisions the query set asks about. Each is a distinct, checkable fact.
 const DECISIONS: &[(&str, &str)] = &[
-    ("database", "{p} will store its records in PostgreSQL rather than MySQL"),
-    ("deadline", "{p} ships to customers on the fourteenth of March"),
+    (
+        "database",
+        "{p} will store its records in PostgreSQL rather than MySQL",
+    ),
+    (
+        "deadline",
+        "{p} ships to customers on the fourteenth of March",
+    ),
     ("owner", "{who} takes over as the engineering owner of {p}"),
-    ("pricing", "{p} renewal was settled at twelve thousand for the year"),
-    ("hosting", "{p} runs in the Frankfurt region for data residency"),
-    ("auth", "{p} authenticates users through the shared identity service"),
+    (
+        "pricing",
+        "{p} renewal was settled at twelve thousand for the year",
+    ),
+    (
+        "hosting",
+        "{p} runs in the Frankfurt region for data residency",
+    ),
+    (
+        "auth",
+        "{p} authenticates users through the shared identity service",
+    ),
 ];
 
 fn app_for(rng: &mut Rng) -> (String, String) {
-    let (bundle, title) = rng.pick(APPS).copied().unwrap_or(("com.apple.Safari", "Safari"));
+    let (bundle, title) = rng
+        .pick(APPS)
+        .copied()
+        .unwrap_or(("com.apple.Safari", "Safari"));
     (bundle.to_string(), title.to_string())
 }
 
@@ -122,8 +142,12 @@ impl Workload for CleanWorkload {
         let planned = queries.min(events);
         let mut slots: Vec<usize> = (0..events).collect();
         rng.shuffle(&mut slots);
-        let mut plan: Vec<(usize, usize)> =
-            slots.into_iter().take(planned).enumerate().map(|(q, slot)| (slot, q)).collect();
+        let mut plan: Vec<(usize, usize)> = slots
+            .into_iter()
+            .take(planned)
+            .enumerate()
+            .map(|(q, slot)| (slot, q))
+            .collect();
         plan.sort_unstable();
 
         let mut out: Vec<BenchEvent> = Vec::with_capacity(events);
@@ -140,8 +164,11 @@ impl Workload for CleanWorkload {
                 let who = PEOPLE[q % PEOPLE.len()];
                 // Past PROJECTS x DECISIONS distinct pairs, suffix the topic to keep them unique.
                 let round = q / (PROJECTS.len() * DECISIONS.len());
-                let topic =
-                    if round == 0 { topic.to_string() } else { format!("{topic}{round}") };
+                let topic = if round == 0 {
+                    topic.to_string()
+                } else {
+                    format!("{topic}{round}")
+                };
                 let mut ev = decision_event(ts, project, who, &topic, template);
                 if round > 0 {
                     ev.content = format!("{} (revision {})", ev.content, round);
@@ -163,7 +190,11 @@ impl Workload for CleanWorkload {
             })
             .collect();
 
-        GeneratedWorkload { name: self.name(), events: out, queries }
+        GeneratedWorkload {
+            name: self.name(),
+            events: out,
+            queries,
+        }
     }
 }
 
@@ -214,7 +245,11 @@ impl Workload for DuplicateWorkload {
             i += 1;
         }
 
-        GeneratedWorkload { name: self.name(), events: out, queries: base.queries }
+        GeneratedWorkload {
+            name: self.name(),
+            events: out,
+            queries: base.queries,
+        }
     }
 }
 
@@ -223,6 +258,19 @@ const REVISIONS: usize = 3;
 
 /// The values a tracked project's database choice moves through, in order.
 const TEMPORAL_VALUES: [&str; REVISIONS] = ["PostgreSQL", "SQLite", "PostgreSQL"];
+
+/// Smallest corpus that can give every temporal query all of its revisions.
+///
+/// Query count is capped by the distinct projects available to the generator. Keeping this
+/// calculation beside those private constants prevents validation and generation from drifting.
+pub fn minimum_temporal_events(queries: usize) -> usize {
+    queries.min(PROJECTS.len()).max(1) * REVISIONS
+}
+
+/// Maximum number of distinct temporal queries this vocabulary can generate.
+pub fn temporal_project_count() -> usize {
+    PROJECTS.len()
+}
 
 /// Temporal corpus: facts that are overwritten by later facts.
 ///
@@ -241,32 +289,26 @@ impl Workload for TemporalWorkload {
 
     fn generate(&self, rng: &mut Rng, events: usize, queries: usize) -> GeneratedWorkload {
         let tracked = queries.min(PROJECTS.len()).max(1);
-        let revision_events = tracked * REVISIONS;
+        let revision_events = minimum_temporal_events(queries);
         let filler = events.saturating_sub(revision_events);
 
         // Revisions are spread across the corpus rather than written back to back, so the stale and
         // the current statement sit far apart in the log — which is the situation that makes a
         // present-tense question hard in the first place.
         let mut planned: Vec<(usize, usize, usize)> = Vec::with_capacity(revision_events);
-        let band = events.max(1) / REVISIONS;
         for p in 0..tracked {
             for r in 0..REVISIONS {
-                let base = r * band;
-                let offset = if band > 0 { (p * 7 + r * 13) % band } else { 0 };
-                planned.push(((base + offset).min(events.saturating_sub(1)), p, r));
+                let band_start = r * events / REVISIONS;
+                let band_end = (r + 1) * events / REVISIONS;
+                let band_len = band_end - band_start;
+                // Config validation guarantees `band_len >= tracked`. Even spacing therefore
+                // gives every revision a unique position; the old modular jitter collided for
+                // small valid corpora and silently dropped history (issue #221).
+                let offset = p * band_len / tracked;
+                planned.push((band_start + offset, p, r));
             }
         }
         planned.sort_unstable();
-        // Two projects can land on the same index in a small corpus. The runner walks the stream
-        // once and plants at most one revision per position, so a collision would silently drop a
-        // revision and shorten the corpus — turning a "50,000 events" run into 49,997 without
-        // saying so. Spread collisions forward instead; band separation still keeps each project's
-        // revisions in order.
-        for i in 1..planned.len() {
-            if planned[i].0 <= planned[i - 1].0 {
-                planned[i].0 = (planned[i - 1].0 + 1).min(events.saturating_sub(1));
-            }
-        }
 
         let mut out: Vec<BenchEvent> = Vec::with_capacity(events);
         // Per project, the fact each revision asserted, in order.
@@ -336,7 +378,11 @@ impl Workload for TemporalWorkload {
             })
             .collect();
 
-        GeneratedWorkload { name: self.name(), events: out, queries }
+        GeneratedWorkload {
+            name: self.name(),
+            events: out,
+            queries,
+        }
     }
 }
 

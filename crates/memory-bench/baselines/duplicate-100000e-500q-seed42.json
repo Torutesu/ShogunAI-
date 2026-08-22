@@ -8,8 +8,8 @@
     "queries": 500,
     "k": 10,
     "warmup": 20,
-    "db_path": "C:\\Users\\sisig\\AppData\\Local\\Temp\\claude\\d--ShogunAI\\1fe674f8-b7dc-4584-a7c3-48315f3ef914\\scratchpad\\db\\d.db",
-    "out_dir": "C:\\Users\\sisig\\AppData\\Local\\Temp\\claude\\d--ShogunAI\\1fe674f8-b7dc-4584-a7c3-48315f3ef914\\scratchpad\\out\\reports",
+    "db_path": "d.db",
+    "out_dir": "reports",
     "write_batch": 1000
   },
   "environment": {

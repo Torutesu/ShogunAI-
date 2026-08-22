@@ -24,6 +24,12 @@ Before changing how memory behaves, establish what it currently does. Specifical
 
 ## Running
 
+`--db` names a disposable **directory** that must not exist yet. The benchmark claims that whole
+directory atomically, then creates `memory-bench.sqlite`, `memory-bench.sqlite-wal`, and
+`memory-bench.sqlite-shm` inside it. It never opens the caller's path as SQLite, reuses a directory,
+resets a database, or deletes caller-owned storage. This directory contract closes the gap between
+"path does not exist" checking and SQLite opening a file — critical on a personal-memory system.
+
 ```bash
 # Defaults: clean workload, 100k events, 500 queries, seed 42, in-memory.
 cargo run -p memory-bench --release
@@ -31,7 +37,7 @@ cargo run -p memory-bench --release
 # The measurement configuration — on disk, report saved.
 cargo run -p memory-bench --release -- \
   --workload clean --events 100000 --queries 500 --seed 42 \
-  --db /tmp/bench.db --out reports
+  --db /tmp/memory-bench-run --out reports
 
 cargo run -p memory-bench --release -- --workload duplicate --events 10000 --queries 200
 cargo run -p memory-bench --release -- --workload temporal  --events 50000 --queries 12
@@ -84,8 +90,11 @@ are retained: a 2ms mean with a 400ms p99 is a product that feels broken, and th
 contains, not from what we submitted.
 
 **Duplicate collapse rate** — of the repeats the workload contained, the share the backend
-recognised. `null` on a clean corpus: there was no denominator, and reporting 0% would suggest a
-failure where there was nothing to detect.
+recognised **correctly**. Every reported merge is checked against the fact the row's first writer
+carried. One merge between different facts disqualifies the run and makes both collapse rate and
+write amplification `null`; subtracting bad merges from one numerator is insufficient because data
+loss also shrinks the database. This keeps lossy semantic dedup from scoring above the baseline by
+throwing memories away. `null` on a clean corpus too: there is no denominator.
 
 **Recall@1/5/10 and MRR** — computed the same way `shogun-memory/tests/retrieval_eval.rs` computes
 them, deliberately. Two definitions of recall@5 in one repository would make the scale numbers and
@@ -95,18 +104,24 @@ the quality numbers incomparable.
 (a superseded fact outranked every correct one). The second is the sharper number: a stale row
 sitting at rank 9 is untidy, one at rank 1 is a wrong answer.
 
-**Resources** — sampled peak RSS and mean CPU% over the run, via `spike_harness::cpu`'s delta
-arithmetic. Peak RSS is a *sampled* peak; a spike between two samples is invisible to it. Mean CPU
-is an average over this benchmark's measurement window and nothing else — it is not an idle-CPU
+**Resources** — sampled peak RSS and mean CPU% over the run. Mean CPU is total CPU time over
+total wall time between the first and last reading — duration-weighted, so an unevenly sampled run
+does not skew it. Peak RSS is a *sampled* peak; a spike between two samples is invisible to it.
+Mean CPU covers this benchmark's measurement window and nothing else — it is not an idle-CPU
 figure and must never be compared against `slo::IDLE_CPU_PCT`, which is defined over a 1-minute
 idle window.
 
-Every rate is nullable. A metric a workload cannot express reports `null`, never `0`.
+Every rate is nullable. A metric a workload cannot express reports `null`, never `0`. Reports also
+carry `validity.valid` plus machine-readable disqualification reasons. Wrong merges, write failures,
+query failures, missing or dirty Git provenance, and undersized query sets make the whole run
+invalid for automated comparison. At least 20 query samples are required for a p95 SLO verdict;
+smaller smoke runs still complete, but publish no pass/fail claim.
 
 ## Reproducibility
 
-A result is defined by `(workload, seed, events, queries)` plus the commit and the build profile.
-All of it is written into the report:
+A result is defined by all runtime knobs (`workload`, `seed`, `events`, `queries`, `k`, `warmup`,
+and `write_batch`) plus storage/retrieval mode, commit, and build profile. All of it is written into
+the report:
 
 ```json
 {
@@ -118,7 +133,14 @@ All of it is written into the report:
 ```
 
 `git_dirty` matters as much as `git_commit`: a run from a modified tree belongs to no commit, and
-recording it as a baseline for that SHA would be wrong.
+recording it as a baseline for that SHA would be wrong. `db_path` and `out_dir` are recorded as
+final path components only — where the scratch directory lived on one contributor's disk is
+machine metadata, not part of what defines the result, and committed baselines are public.
+The commit is embedded at build time. If that binary later runs after its source checkout moves to
+another commit, the embedded build commit remains unchanged and the run is marked dirty.
+
+Report filenames include every runtime knob and storage/retrieval mode. Repeating an identical run
+creates an atomic `-runN` sibling; persistence never opens an existing artifact for writing.
 
 The seed drives a SplitMix64 defined in `rng.rs` rather than pulled from `rand`, whose generators
 are explicitly allowed to change output between minor versions. A stored baseline has to stay
