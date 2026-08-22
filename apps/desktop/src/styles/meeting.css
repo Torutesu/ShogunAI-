@@ -776,7 +776,7 @@
      deliberate gap between two independent surfaces. */
   position: fixed;
   left: 50%;
-  bottom: 76px;
+  bottom: 84px;
   z-index: 30;
   width: 320px;
   box-sizing: border-box;
@@ -786,7 +786,7 @@
   background: rgba(31, 31, 33, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 16px;
-  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
   backdrop-filter: blur(24px) saturate(1.2);
   -webkit-backdrop-filter: blur(24px) saturate(1.2);
 }

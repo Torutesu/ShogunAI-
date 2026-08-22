@@ -19,9 +19,9 @@ const BAR_SIZE: (f64, f64) = (400.0, 88.0);
 /// In-meeting black control capsule only (content panels are separate windows).
 /// Height includes top inset for bar-slot tooltips (they sit above the 52px bar).
 const PILL_SIZE: (f64, f64) = (320.0, 100.0);
-/// Host pill enlarged so `.ov__modemenu--bar` (+ lang row) fits above the capsule.
-/// Rough: tip pad 36 + menu (~3×36 + lang row + pad) + gap 8 + pill 52 + bottom pad 8 ≈ 280.
-const PILL_WITH_MENU_SIZE: (f64, f64) = (320.0, 280.0);
+/// Host pill enlarged for the detached meeting quick-settings card.
+/// Includes the full card, 24px gap, 52px pill, and 8px bottom inset.
+const PILL_WITH_MENU_SIZE: (f64, f64) = (360.0, 464.0);
 /// Host bar mode-menu open — `recording_overlay_size` must grow or sync fights the FE.
 static HOST_MENU_OPEN: AtomicBool = AtomicBool::new(false);
 /// Live captions window default (own NSWindow — not stacked in the host).
