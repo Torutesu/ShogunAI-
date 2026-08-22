@@ -185,3 +185,24 @@ Figma を直接編集してよい。ただし §1 の「❌」列を変える場
 
 MCP から読み戻すときは `get_design_context` にノード指定の URL を渡す
 （フレーム名は `1.1 …` 形式で安定させてある）。
+
+---
+
+## 5. Ver.2 ページ — Apple-grade pass（2026-08-22）
+
+`Product Flow — in a Mac` とは別に、**Ver.2 ページ（node 439-3188）**に洗練パスを新設した。
+既存レーンの置き換えではなく、「この品質で作り直すならこう」という提案面。タイポは
+**SF Pro**（見出し Semibold・トラッキング -1.5〜-2%）、等幅は JetBrains Mono、和文は
+Noto Sans JP。素材は単一（#0B0D11 のガラス、白 4.5% のカード、白 7〜10% のヘアライン、
+CTA のみ #004CFC→#2E75FF の縦グラデ）。**暗部を RGB 10 未満に置かない**のは動画パスと同じ理由。
+
+| セクション | 中身 | 文言の出典 |
+|---|---|---|
+| V2·0 Design language | 型ランプ・パレット・コントロール一式（1枚） | — |
+| V2·1 Onboarding | 6枚: Welcome / What it reads / Permissions / Trial & plans / Connections / Ready | `strings.ts` `ob*` 逐語 |
+| V2·2 Plan & billing | 3枚: トライアル中の Settings / 期限のプラン選択シート / アクティベート済み管理 | `plan*`（$49/$99 年額・$62/$124 月額） |
+| V2·3 Core surfaces | 5枚: Notch idle→expanded / Morning brief / Meeting notes（日本語ライブ翻訳） / Search+Approvals / Settings›Privacy | `panel` / `ds*` / `meeting*` / `FULL_UI` |
+
+守っていること: L1/L2/L3 の色とタグは製品と同一。送信系は必ず L3 + 「Leaves this Mac」明示。
+Gmail 行には THIRD-PARTY タグ（Composio 全面経由の開示）。プラン文言・価格は `strings.ts` が正。
+デモデータは Hero デモと同じ世界（Aiko / 12k / Friday 17:00 / the 14th）。
