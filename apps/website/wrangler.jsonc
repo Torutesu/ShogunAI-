@@ -17,6 +17,21 @@
       "vars": {
         "WAITLIST_ALLOWED_ORIGINS": "https://shogunaios.com,https://www.shogunaios.com"
       },
+      // Postgres reached through Cloudflare's network instead of a raw socket. The Worker's
+      // `nodejs_compat` socket shim cannot reliably reach Supabase's pooler — roughly half of all
+      // database calls came back `proxy request failed, cannot connect to the specified address`
+      // — and Hyperdrive is the supported way off that shim. `src/db/index.ts` prefers this
+      // binding and falls back to DATABASE_URL wherever it is absent (next dev, tests, migrate).
+      //
+      // Query caching is deliberately OFF on the config itself: this database holds licence
+      // validity and subscription status, and a cached read means a revoked licence keeps
+      // verifying until the entry expires. The value here is the connection, not the cache.
+      "hyperdrive": [
+        {
+          "binding": "HYPERDRIVE",
+          "id": "c8c81f7f1452481497c4690fb9d5db65"
+        }
+      ],
       "d1_databases": [
         {
           "binding": "WAITLIST_METRICS",
