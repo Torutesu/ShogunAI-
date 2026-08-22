@@ -905,6 +905,7 @@ pub mod mac {
                 consent_acknowledged: true,
                 draft_stop: false,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             let standard = entitlements(Plan::Standard, 0);
             let expired = entitlements(
@@ -939,6 +940,7 @@ pub mod mac {
                 consent_acknowledged: true,
                 draft_stop: true,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             assert!(
                 !composio_send_allowed(policy, &pro()),
@@ -953,6 +955,7 @@ pub mod mac {
                 consent_acknowledged: false,
                 draft_stop: false,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             assert!(
                 !composio_send_allowed(policy, &pro()),
@@ -967,6 +970,7 @@ pub mod mac {
                 consent_acknowledged: true,
                 draft_stop: false,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             assert!(
                 composio_send_allowed(policy, &pro()),
@@ -1027,6 +1031,7 @@ pub mod mac {
                 draft_stop: false,
                 consent_acknowledged: true,
                 user_id: "test-user-123".to_string(),
+                ..ComposioPolicy::default()
             };
             let json = serde_json::to_string(&original).expect("serialize");
             let loaded: ComposioPolicy = serde_json::from_str(&json).expect("deserialize");
@@ -1041,6 +1046,7 @@ pub mod mac {
                 draft_stop: false,
                 consent_acknowledged: true,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             let updated = with_user_id(p, "new-user");
             assert_eq!(updated.user_id, "new-user");
@@ -1054,6 +1060,7 @@ pub mod mac {
                 draft_stop: true,
                 consent_acknowledged: false,
                 user_id: "preserved-user".to_string(),
+                ..ComposioPolicy::default()
             };
             let updated = with_flags(p, false, true);
             assert_eq!(updated.user_id, "preserved-user");
