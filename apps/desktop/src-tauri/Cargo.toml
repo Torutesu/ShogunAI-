@@ -88,6 +88,8 @@ objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSDictionary", "NSGeometry", "NSNotification", "NSURL",
     # The cue WAVs are compiled in and handed to NSSound as NSData (#49).
     "NSData",
+    # macOS version for the Help & Support diagnostics tuple (support.rs).
+    "NSProcessInfo",
 ] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = [
     "AVCaptureDevice", "AVMediaFormat", "block2",

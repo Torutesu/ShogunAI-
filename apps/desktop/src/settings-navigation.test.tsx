@@ -25,7 +25,7 @@ describe("settings section navigation", () => {
   it("shows focused pages instead of one undifferentiated settings list", () => {
     render(<Harness />);
 
-    expect(screen.getAllByRole("tab")).toHaveLength(7);
+    expect(screen.getAllByRole("tab")).toHaveLength(8);
     expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
 
     fireEvent.click(screen.getByRole("tab", { name: "Memory" }));
@@ -41,9 +41,9 @@ describe("settings section navigation", () => {
     expect(screen.getByRole("tab", { name: "Memory" }).getAttribute("aria-selected")).toBe("true");
 
     fireEvent.keyDown(screen.getByRole("tab", { name: "Memory" }), { key: "End" });
-    expect(screen.getByRole("tab", { name: "Privacy" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Help" }).getAttribute("aria-selected")).toBe("true");
 
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Privacy" }), { key: "Home" });
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Help" }), { key: "Home" });
     expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
   });
 });

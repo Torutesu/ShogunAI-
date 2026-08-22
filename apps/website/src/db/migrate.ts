@@ -214,6 +214,26 @@ async function main() {
     )
   `;
 
+  // CS / bug-report intake (support窓口). Rollback = `DROP TABLE support_tickets;` — nothing
+  // else references it, and both intake endpoints simply start failing closed without it.
+  await sql`
+    CREATE TABLE IF NOT EXISTS support_tickets (
+      id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_at  timestamptz NOT NULL DEFAULT now(),
+      source      text NOT NULL DEFAULT 'desktop',
+      category    text NOT NULL,
+      message     text NOT NULL,
+      email       text,
+      app_version text,
+      os_version  text,
+      plan        text,
+      status      text NOT NULL DEFAULT 'open',
+      ip_hash     text
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS support_tickets_status_idx  ON support_tickets (status)`;
+  await sql`CREATE INDEX IF NOT EXISTS support_tickets_created_idx ON support_tickets (created_at)`;
+
   // Row Level Security on every table this file creates.
   //
   // Nothing here reaches the database through Supabase's PostgREST layer — `db/index.ts` opens a
@@ -243,13 +263,14 @@ async function main() {
     'subscriptions',
     'licenses',
     'stripe_events',
+    'support_tickets',
   ]) {
     await sql`ALTER TABLE ${sql(table)} ENABLE ROW LEVEL SECURITY`;
   }
 
   console.log(
     'migrated: participants, rate_limits, points_ledger, x_follower_snapshot, x_quote_snapshot, ' +
-      'billing_customers, subscriptions, licenses, stripe_events (RLS enabled on all)',
+      'billing_customers, subscriptions, licenses, stripe_events, support_tickets (RLS enabled on all)',
   );
   await sql.end();
 }

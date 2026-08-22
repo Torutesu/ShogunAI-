@@ -63,6 +63,11 @@ pub mod model_asset;
 /// licence key + anonymous device id only; returns the signed token the Rust core verifies.
 #[cfg(feature = "net")]
 pub mod license_client;
+/// CS / bug-report intake client (support窓口). Sends only what the user typed plus the opt-in
+/// diagnostics tuple to the operator's intake endpoint; recorded on the egress ledger by the
+/// caller (`Route::Support`).
+#[cfg(feature = "net")]
+pub mod support_client;
 pub mod meeting;
 /// Composio-based Gmail read transport — routes read calls through the Composio tool API instead
 /// of direct Gmail REST (second-layer reads, allowlisted egress, FR-TR-03).

@@ -42,11 +42,7 @@ export default async function PrivacyPage() {
             },
             {
               h: '6. あなたの選択肢',
-              p: 'メール配信は配信停止リンクから解除できます。待機リスト情報の削除、保有情報に関する問い合わせ、その他プライバシー関連の要望は hello@shogunai.com までご連絡ください。地域によっては、アクセス、訂正、削除、異議申立て等の法的権利を持つ場合があります。',
-            },
-            {
-              h: '7. お問い合わせ',
-              p: 'このポリシーや ShogunAI のプライバシー対応についてのご質問は、hello@shogunai.com までお送りください。',
+              p: 'メール配信は配信停止リンクから解除できます。待機リスト情報の削除、保有情報に関する問い合わせ、その他プライバシー関連のご要望も受け付けます。地域によっては、アクセス、訂正、削除、異議申立て等の法的権利を持つ場合があります。',
             },
           ],
         }
@@ -60,8 +56,7 @@ export default async function PrivacyPage() {
               { h: '3. Nuestro enfoque local-first', p: 'Tu contexto debe permanecer bajo tu control. Priorizamos el procesamiento y almacenamiento en el dispositivo. Si se habilitan sincronización en la nube o proveedores externos, mostraremos qué se comparte y te dejaremos elegir.' },
               { h: '4. Proveedores y divulgación', p: 'No divulgamos información personal salvo cuando sea razonablemente necesario para cumplir la ley, proteger derechos, prevenir abusos u operar infraestructura esencial. Los proveedores reciben solo la información mínima necesaria.' },
               { h: '5. Conservación y eliminación', p: 'Conservamos los datos de la lista de espera y consultas solo durante el tiempo razonablemente necesario. La información que deja de ser necesaria se elimina o anonimiza. Los datos locales del producto pueden eliminarse mediante controles del producto o desinstalando el software.' },
-              { h: '6. Tus opciones', p: 'Puedes darte de baja desde los correos recibidos. Para solicitar eliminación, acceso u otra petición de privacidad, escribe a hello@shogunai.com. Según tu lugar de residencia, puedes tener derechos adicionales.' },
-              { h: '7. Contacto', p: 'Envía tus preguntas sobre esta política o nuestras prácticas de privacidad a hello@shogunai.com.' },
+              { h: '6. Tus opciones', p: 'Puedes darte de baja desde los correos recibidos. Atendemos solicitudes de eliminación, acceso y otras peticiones de privacidad. Según tu lugar de residencia, puedes tener derechos adicionales.' },
             ],
           }
         : locale === 'de'
@@ -74,8 +69,7 @@ export default async function PrivacyPage() {
                 { h: '3. Unser local-first Ansatz', p: 'Dein Kontext soll unter deiner Kontrolle bleiben. Wir priorisieren Verarbeitung und Speicherung auf dem Gerät. Bei optionaler Cloud-Synchronisierung oder externen Anbietern zeigen wir transparent, was geteilt wird, und überlassen dir die Wahl.' },
                 { h: '4. Weitergabe und Dienstleister', p: 'Wir geben personenbezogene Daten nur weiter, wenn dies für gesetzliche Pflichten, den Schutz von Rechten, Missbrauchsprävention oder wesentliche Infrastruktur erforderlich ist. Dienstleister erhalten nur die minimal nötigen Informationen.' },
                 { h: '5. Aufbewahrung und Löschung', p: 'Daten aus Warteliste und Anfragen werden nur so lange gespeichert, wie es betrieblich, rechtlich oder sicherheitsbedingt nötig ist. Nicht mehr benötigte Daten werden gelöscht oder anonymisiert. Lokale Produktdaten können über Produktkontrollen oder durch Deinstallation entfernt werden.' },
-                { h: '6. Deine Wahlmöglichkeiten', p: 'Produkt-E-Mails können über den Abmeldelink beendet werden. Für Löschung, Auskunft oder andere Datenschutzanfragen erreichst du uns unter hello@shogunai.com. Je nach Wohnort können weitere gesetzliche Rechte gelten.' },
-                { h: '7. Kontakt', p: 'Fragen zu dieser Erklärung oder unseren Datenschutzpraktiken sendest du an hello@shogunai.com.' },
+                { h: '6. Deine Wahlmöglichkeiten', p: 'Produkt-E-Mails können über den Abmeldelink beendet werden. Anfragen zu Löschung, Auskunft oder anderen Datenschutzthemen bearbeiten wir. Je nach Wohnort können weitere gesetzliche Rechte gelten.' },
               ],
             }
           : {
@@ -105,11 +99,7 @@ export default async function PrivacyPage() {
             },
             {
               h: '6. Your choices',
-              p: 'You can unsubscribe from product emails using the link in those messages. To request deletion of waitlist information, ask about the information we hold, or make another privacy-related request, contact hello@shogunai.com. Depending on where you live, you may also have legal rights to access, correct, delete, or object to certain uses of your information.',
-            },
-            {
-              h: '7. Contact',
-              p: 'Questions about this Privacy Policy or ShogunAI’s privacy practices can be sent to hello@shogunai.com.',
+              p: 'You can unsubscribe from product emails using the link in those messages. We act on requests to delete waitlist information, to ask about the information we hold, and other privacy-related requests. Depending on where you live, you may also have legal rights to access, correct, delete, or object to certain uses of your information.',
             },
           ],
         };

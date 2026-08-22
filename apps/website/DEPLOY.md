@@ -98,6 +98,8 @@ Set these per-environment (dashboard → Settings → Variables, or `wrangler se
 | `STRIPE_PRICE_{STANDARD,PRO}_{ANNUAL,MONTHLY}` | prod | All four, or `billingReady()` closes billing entirely. |
 | `STRIPE_WEBHOOK_SECRET` | prod | From the endpoint's **Signing secret**. Rolling it needs the new value here within the overlap window you chose. |
 | `LICENSE_SIGNING_KEY` | prod | base64 of the PKCS#8 PEM from `scripts/gen-license-keypair.mjs`. Without it `/api/license/verify` answers `signing_key_not_configured` — purchases still complete, but no installed Mac can verify. |
+| `RESEND_API_KEY` | prod | Resend API key for support-ticket notifications. **Unset means no notification is ever sent** — reports still save, but nobody is told. |
+| `SUPPORT_NOTIFY_TO` / `SUPPORT_NOTIFY_FROM` | optional | Override the notification inbox and envelope sender. Defaults deliver with no DNS work: `selectdev111@gmail.com` and Resend's sandbox sender `onboarding@resend.dev`. The sandbox sender only reaches the Resend account owner's address, so **the Resend account must be registered to whatever `TO` is**. Once `shogunaios.com` is verified in Resend (SPF/DKIM), set both to `info@shogunaios.com`. |
 
 **Adding a secret in the dashboard is not enough on its own.** A newly added secret did not
 reach `process.env` in the running Worker until the next `wrangler deploy`, while every secret

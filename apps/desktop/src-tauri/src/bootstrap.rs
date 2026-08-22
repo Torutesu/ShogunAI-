@@ -145,6 +145,9 @@ pub fn run() {
             billing::mac::billing_deactivate,
             billing::mac::billing_open_checkout,
             billing::mac::billing_open_portal,
+            // CS / bug-report 窓口 (Help & Support). Validates core-side, posts via
+            // shogun_core::support_client, records Route::Support on the egress ledger.
+            support::mac::support_submit_report,
             onboarding::mac::permission_status,
             onboarding::mac::onboarding_state,
             onboarding::mac::set_onboarding_state,

@@ -71,7 +71,7 @@ export function stripe(): Stripe {
     cached = {
       key,
       client: new Stripe(key, {
-        appInfo: { name: 'ShogunAI', url: 'https://syogun.com' },
+        appInfo: { name: 'ShogunAI', url: 'https://shogunaios.com' },
         maxNetworkRetries: 2,
         httpClient: Stripe.createFetchHttpClient(),
       }),

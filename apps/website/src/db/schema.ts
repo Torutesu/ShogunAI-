@@ -199,3 +199,42 @@ export const stripeEvents = pgTable('stripe_events', {
 export type BillingCustomer = typeof billingCustomers.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type License = typeof licenses.$inferSelect;
+
+/**
+ * CS / bug-report intake (the "support窓口"). One row per report submitted from the desktop
+ * app's Help & Support panel (or, later, a web form). The row carries only what the reporter
+ * typed plus the small opt-in diagnostics tuple — never capture content, never memory content,
+ * never a licence key. Email is optional: a report without one is still actionable, it just
+ * cannot be answered directly.
+ */
+export const supportTickets = pgTable(
+  'support_tickets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Where the report came from: 'desktop' today; 'web' reserved for a site form. */
+    source: text('source').notNull().default('desktop'),
+    /** 'bug' | 'feedback' | 'question' — the closed set the intake endpoint enforces. */
+    category: text('category').notNull(),
+    /** The reporter's own words. The only free text in the row. */
+    message: text('message').notNull(),
+    /** Optional reply address. Kept out of every list/aggregate view that doesn't need it. */
+    email: text('email'),
+    // Opt-in diagnostics (each independently nullable — absent means "not shared").
+    appVersion: text('app_version'),
+    osVersion: text('os_version'),
+    /** 'trial' | 'standard' | 'pro' as self-reported by the app; a hint, not an entitlement. */
+    plan: text('plan'),
+    /** Triage lifecycle: open → triaged → resolved (docs/support-runbook.md). */
+    status: text('status').notNull().default('open'),
+    /** Salted hash of the submitting IP — abuse triage only, same treatment as participants. */
+    ipHash: text('ip_hash'),
+  },
+  (t) => [
+    index('support_tickets_status_idx').on(t.status),
+    index('support_tickets_created_idx').on(t.createdAt),
+  ],
+);
+
+export type SupportTicket = typeof supportTickets.$inferSelect;
+export type NewSupportTicket = typeof supportTickets.$inferInsert;
