@@ -30,12 +30,15 @@ OPTIONS:
     --k <N>             Results requested per query. Default: 10
     --warmup <N>        Unmeasured queries before measurement. Default: 20
     --seed <N>          Workload seed. Default: 42. Same seed = same corpus, forever.
-    --db <PATH>         SQLite file to use. Default: in-memory.
+    --db <PATH>         SQLite file to create. Default: in-memory.
+                        The path must NOT exist (nor its -wal/-shm sidecars): the benchmark
+                        migrates and writes synthetic events into the file it is given, so it
+                        only accepts disposable storage and never reuses or resets a database.
                         Quote latency numbers only from a file-backed run — in-memory writes
                         never touch a filesystem and skip fsync entirely.
     --out <DIR>         Write the JSON report into DIR. Default: print the summary only.
-    --write-batch <N>   Events per bulk-load transaction. Default: 1000. Use 1 to measure the
-                        true per-capture write cost including commit.
+    --write-batch <N>   Events per bulk-load transaction, at least 1. Default: 1000. Use 1 to
+                        measure the true per-capture write cost including commit.
     -h, --help          Show this help.
 
 REPRODUCIBILITY:
@@ -71,9 +74,13 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
         if flag == "-h" || flag == "--help" {
             return Ok(None);
         }
-        let value = args.get(i + 1).ok_or_else(|| format!("{flag} needs a value"))?;
+        let value = args
+            .get(i + 1)
+            .ok_or_else(|| format!("{flag} needs a value"))?;
         let num = |what: &str| -> Result<usize, String> {
-            value.parse::<usize>().map_err(|_| format!("{what} must be a number, got {value:?}"))
+            value
+                .parse::<usize>()
+                .map_err(|_| format!("{what} must be a number, got {value:?}"))
         };
         match flag {
             "--workload" => {
@@ -102,9 +109,26 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
         i += 2;
     }
 
-    if cfg.events == 0 {
-        return Err("--events must be greater than zero".to_string());
-    }
+    // Bounds (issue #221): zero would divide or loop to nothing, and an absurd value — easy for a
+    // script or an agent to generate — would exhaust memory before producing a number anyone
+    // wants. The caps are far above any measurement this benchmark is for.
+    const MAX_EVENTS: usize = 10_000_000;
+    const MAX_QUERIES: usize = 1_000_000;
+    const MAX_K: usize = 1_000;
+    const MAX_WARMUP: usize = 100_000;
+    let bounded = |what: &str, v: usize, min: usize, max: usize| -> Result<(), String> {
+        if v < min || v > max {
+            return Err(format!("{what} must be between {min} and {max}, got {v}"));
+        }
+        Ok(())
+    };
+    bounded("--events", cfg.events, 1, MAX_EVENTS)?;
+    bounded("--queries", cfg.queries, 1, MAX_QUERIES)?;
+    bounded("--k", cfg.k, 1, MAX_K)?;
+    bounded("--warmup", cfg.warmup, 0, MAX_WARMUP)?;
+    // Zero would previously be clamped to 1 at run time while the report recorded 0 — the label
+    // and the experiment disagreed. Reject it at the door instead.
+    bounded("--write-batch", cfg.write_batch, 1, MAX_EVENTS)?;
     Ok(Some(cfg))
 }
 
@@ -165,9 +189,16 @@ mod tests {
 
     #[test]
     fn flags_are_applied() {
-        let cfg = parse(&args(&["--workload", "duplicate", "--events", "10", "--seed", "7"]))
-            .expect("parse")
-            .expect("config");
+        let cfg = parse(&args(&[
+            "--workload",
+            "duplicate",
+            "--events",
+            "10",
+            "--seed",
+            "7",
+        ]))
+        .expect("parse")
+        .expect("config");
         assert_eq!(cfg.workload, "duplicate");
         assert_eq!(cfg.events, 10);
         assert_eq!(cfg.seed, 7);
@@ -194,5 +225,29 @@ mod tests {
     #[test]
     fn zero_events_is_rejected() {
         assert!(parse(&args(&["--events", "0"])).is_err());
+    }
+
+    #[test]
+    fn out_of_bounds_numbers_are_rejected_with_the_limit_named() {
+        // Issue #221: agent-generated values can be absurd; the error names the accepted range.
+        let err = parse(&args(&["--events", "10000001"])).expect_err("too many events");
+        assert!(err.contains("between 1 and 10000000"), "{err}");
+        assert!(parse(&args(&["--queries", "0"])).is_err());
+        assert!(parse(&args(&["--queries", "1000001"])).is_err());
+        assert!(parse(&args(&["--k", "0"])).is_err());
+        assert!(parse(&args(&["--k", "1001"])).is_err());
+        assert!(parse(&args(&["--warmup", "100001"])).is_err());
+    }
+
+    #[test]
+    fn write_batch_zero_is_rejected_not_silently_clamped() {
+        // Issue #221: execution used to clamp 0 to 1 while the report recorded 0 — the label and
+        // the experiment disagreed. Now the value that parses is the value that runs.
+        let err = parse(&args(&["--write-batch", "0"])).expect_err("reject zero");
+        assert!(err.contains("--write-batch"), "{err}");
+        let cfg = parse(&args(&["--write-batch", "1"]))
+            .expect("parse")
+            .expect("config");
+        assert_eq!(cfg.write_batch, 1);
     }
 }

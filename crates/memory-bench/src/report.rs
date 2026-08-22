@@ -32,7 +32,9 @@ impl Environment {
     pub fn detect() -> Self {
         let git = |args: &[&str]| -> Option<String> {
             let out = std::process::Command::new("git").args(args).output().ok()?;
-            out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
         };
         let git_commit = git(&["rev-parse", "HEAD"]).filter(|s| !s.is_empty());
         let git_dirty = git(&["status", "--porcelain"]).map(|s| !s.trim().is_empty());
@@ -41,7 +43,11 @@ impl Environment {
             arch: std::env::consts::ARCH.to_string(),
             git_commit,
             git_dirty,
-            profile: if cfg!(debug_assertions) { "debug" } else { "release" },
+            profile: if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            },
         }
     }
 }
@@ -90,6 +96,11 @@ pub struct BenchReport {
     pub benchmark: &'static str,
     pub version: &'static str,
     pub config: BenchConfig,
+    /// Events the generator actually produced (padded/clamped, so normally == `config.events`).
+    pub generated_events: usize,
+    /// Queries the generator actually produced. `clean` plants at most one answer per event, so
+    /// this can be smaller than `config.queries`; the console warns when they differ (issue #221).
+    pub generated_queries: usize,
     pub environment: Environment,
     pub mode: RunMode,
     pub backend: &'static str,
@@ -111,11 +122,15 @@ pub struct BenchReport {
 pub const BENCHMARK_NAME: &str = "shogun-memory-bench";
 /// Report schema version. Bump when a field changes meaning, so old reports are not silently
 /// re-read under new semantics.
-pub const REPORT_VERSION: &str = "0.1";
+pub const REPORT_VERSION: &str = "0.2";
 
 impl BenchReport {
     /// Build the SLO check from the query-latency summary, if there is one.
-    pub fn slo_for(query_latency: Option<LatencySummary>, mode: RunMode, profile: &str) -> Option<SloCheck> {
+    pub fn slo_for(
+        query_latency: Option<LatencySummary>,
+        mode: RunMode,
+        profile: &str,
+    ) -> Option<SloCheck> {
         let q = query_latency?;
         Some(SloCheck {
             name: "NFR-SLO-04 local search p95",
@@ -159,8 +174,16 @@ pub fn render_summary(r: &BenchReport) -> String {
     ));
     s.push_str(&format!(
         "  Retrieval:        {}\n  Storage:          {}\n  Profile:          {}\n\n",
-        if r.mode.semantic { "hybrid (FTS + vector)" } else { "lexical only (no embedder)" },
-        if r.mode.in_memory { "in-memory (no fsync)" } else { "on-disk (WAL)" },
+        if r.mode.semantic {
+            "hybrid (FTS + vector)"
+        } else {
+            "lexical only (no embedder)"
+        },
+        if r.mode.in_memory {
+            "in-memory (no fsync)"
+        } else {
+            "on-disk (WAL)"
+        },
         r.environment.profile
     ));
 
@@ -176,7 +199,17 @@ pub fn render_summary(r: &BenchReport) -> String {
         None => s.push_str("  Latency:          n/a (no writes measured)\n\n"),
     }
 
-    s.push_str(&format!("Retrieval\n  Queries:          {}\n", r.quality.queries));
+    s.push_str(&format!(
+        "Retrieval\n  Queries:          {}\n",
+        r.quality.queries
+    ));
+    if r.generated_queries != r.config.queries {
+        s.push_str(&format!(
+            "  NOTE:             {} queries requested, workload produced {} — percentiles and \
+recall rest on the smaller number\n",
+            r.config.queries, r.generated_queries
+        ));
+    }
     match r.query_latency {
         Some(q) => s.push_str(&format!(
             "  P50:              {:.2} ms\n  P95:              {:.2} ms\n  P99:              {:.2} ms\n  Max:              {:.2} ms\n\n",
@@ -197,6 +230,13 @@ pub fn render_summary(r: &BenchReport) -> String {
         opt_num(r.write_amplification, 3),
         opt_pct(r.duplicate_collapse_rate)
     ));
+    if r.writes.wrong_merges > 0 {
+        s.push_str(&format!(
+            "  WRONG MERGES:     {} — the backend combined events carrying different facts; \
+collapse rate excludes them and this run must not be quoted as an improvement\n",
+            r.writes.wrong_merges
+        ));
+    }
     s.push_str(&format!(
         "  Stale returned:   {}\n  Stale outranking: {}\n\n",
         opt_pct(r.quality.stale_rate),
@@ -210,7 +250,8 @@ pub fn render_summary(r: &BenchReport) -> String {
                 "  Peak RSS:         {:.1} MB (sampled, n={})\n  Mean CPU:         {}\n",
                 mb(res.peak_rss_bytes),
                 res.samples,
-                res.mean_cpu_pct.map_or_else(|| "n/a".to_string(), |c| format!("{c:.1}% over the run")),
+                res.mean_cpu_pct
+                    .map_or_else(|| "n/a".to_string(), |c| format!("{c:.1}% over the run")),
             ));
         }
         None => s.push_str("  n/a (no reader on this platform)\n"),
@@ -228,7 +269,11 @@ pub fn render_summary(r: &BenchReport) -> String {
             slo_check.measured_p95_ms,
             slo_check.threshold_ms,
             slo_check.verdict,
-            if slo_check.authoritative { "" } else { "  (advisory — not a certifying run)" }
+            if slo_check.authoritative {
+                ""
+            } else {
+                "  (advisory — not a certifying run)"
+            }
         ));
     }
 
@@ -269,10 +314,16 @@ mod tests {
             p99_ms: 1.0,
             max_ms: 1.0,
         };
-        let mode = RunMode { semantic: false, in_memory: true };
+        let mode = RunMode {
+            semantic: false,
+            in_memory: true,
+        };
         let check = BenchReport::slo_for(Some(q), mode, "debug").expect("check");
         assert!(check.verdict.is_pass(), "1ms is under the 500ms threshold");
-        assert!(!check.authoritative, "a fast number from a disqualified run must not certify");
+        assert!(
+            !check.authoritative,
+            "a fast number from a disqualified run must not certify"
+        );
     }
 
     #[test]
@@ -286,7 +337,10 @@ mod tests {
             p99_ms: 1.0,
             max_ms: 1.0,
         };
-        let mode = RunMode { semantic: true, in_memory: false };
+        let mode = RunMode {
+            semantic: true,
+            in_memory: false,
+        };
         let check = BenchReport::slo_for(Some(q), mode, "release").expect("check");
         assert!(check.authoritative);
     }
@@ -302,14 +356,20 @@ mod tests {
             p99_ms: 600.0,
             max_ms: 600.0,
         };
-        let mode = RunMode { semantic: true, in_memory: false };
+        let mode = RunMode {
+            semantic: true,
+            in_memory: false,
+        };
         let check = BenchReport::slo_for(Some(q), mode, "release").expect("check");
         assert!(!check.verdict.is_pass());
     }
 
     #[test]
     fn no_queries_means_no_slo_claim() {
-        let mode = RunMode { semantic: true, in_memory: false };
+        let mode = RunMode {
+            semantic: true,
+            in_memory: false,
+        };
         assert!(BenchReport::slo_for(None, mode, "release").is_none());
     }
 }

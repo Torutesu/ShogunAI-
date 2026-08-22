@@ -55,12 +55,15 @@ impl LatencySeries {
     }
 
     pub fn min_ms(&self) -> Option<f64> {
-        self.samples_ms.iter().copied().fold(None, |acc: Option<f64>, x| {
-            Some(match acc {
-                Some(a) => a.min(x),
-                None => x,
+        self.samples_ms
+            .iter()
+            .copied()
+            .fold(None, |acc: Option<f64>, x| {
+                Some(match acc {
+                    Some(a) => a.min(x),
+                    None => x,
+                })
             })
-        })
     }
 }
 
@@ -99,6 +102,11 @@ pub struct WriteStats {
     pub submitted: u64,
     /// Writes the backend absorbed into an existing row.
     pub deduplicated: u64,
+    /// Merges that landed on a row carrying a *different* fact — information destroyed, not
+    /// deduplicated (issue #221). The workload knows which fact each event carries, so the runner
+    /// can check every reported merge against the row's owner. Always 0 for an honest backend;
+    /// any non-zero value disqualifies the collapse rate as a score.
+    pub wrong_merges: u64,
     /// Writes that returned an error.
     pub failed: u64,
     /// Rows in the log afterwards.
@@ -123,7 +131,12 @@ impl WriteStats {
         Some(self.rows_after as f64 / self.unique_facts as f64)
     }
 
-    /// Of the repeats the workload contained, the share the backend recognised.
+    /// Of the repeats the workload contained, the share the backend recognised **correctly**.
+    ///
+    /// Only merges onto a row carrying the same fact count. A backend that combined two different
+    /// memories would otherwise be rewarded for destroying information (issue #221): collapsing
+    /// "Mom likes tea" into "Mom is allergic to tea" must never raise this number. Wrong merges
+    /// are excluded from the numerator and reported separately as [`WriteStats::wrong_merges`].
     ///
     /// `None` when the workload contained no repeats — in a clean corpus this metric has no
     /// denominator, and reporting 0% would suggest a failure where there was nothing to detect.
@@ -131,7 +144,8 @@ impl WriteStats {
         if self.duplicate_events == 0 {
             return None;
         }
-        Some(self.deduplicated as f64 / self.duplicate_events as f64)
+        let correct = self.deduplicated.saturating_sub(self.wrong_merges);
+        Some(correct as f64 / self.duplicate_events as f64)
     }
 }
 
@@ -226,13 +240,20 @@ impl QualityAccumulator {
         Some(total / self.first_correct_rank.len() as f64)
     }
 
-    pub fn summary(&self) -> QualitySummary {
+    /// Summarise, given the `k` results each query actually requested.
+    ///
+    /// A recall@k the run never measured is `None`, not a relabeled smaller recall: with `--k 1`
+    /// the returned lists are one row long, so "recall@5" would be recall@1 wearing the wrong
+    /// name (issue #221).
+    pub fn summary(&self, retrieval_k: usize) -> QualitySummary {
+        let recall_if_measured =
+            |k: usize| -> Option<f64> { (retrieval_k >= k).then(|| self.recall_at(k)).flatten() };
         QualitySummary {
             queries: self.queries(),
             failed: self.failed,
-            recall_at_1: self.recall_at(1),
-            recall_at_5: self.recall_at(5),
-            recall_at_10: self.recall_at(10),
+            recall_at_1: recall_if_measured(1),
+            recall_at_5: recall_if_measured(5),
+            recall_at_10: recall_if_measured(10),
             mrr: self.mrr(),
             temporal_queries: self.temporal_queries,
             stale_returned: self.stale_returned,
@@ -295,7 +316,11 @@ mod tests {
 
     #[test]
     fn write_amplification_is_rows_over_facts() {
-        let w = WriteStats { rows_after: 1500, unique_facts: 1000, ..Default::default() };
+        let w = WriteStats {
+            rows_after: 1500,
+            unique_facts: 1000,
+            ..Default::default()
+        };
         assert_eq!(w.write_amplification(), Some(1.5));
     }
 
@@ -307,8 +332,51 @@ mod tests {
     }
 
     #[test]
+    fn wrong_merges_never_raise_the_collapse_rate() {
+        // Issue #221: a backend that combines two *different* memories destroys information and
+        // must not be scored as if it deduplicated. 150 reported merges of which 100 were wrong →
+        // only the 50 correct ones count.
+        let w = WriteStats {
+            deduplicated: 150,
+            wrong_merges: 100,
+            duplicate_events: 300,
+            ..Default::default()
+        };
+        assert!((w.duplicate_collapse_rate().unwrap() - 50.0 / 300.0).abs() < 1e-12);
+        // Pathological accounting (more wrong than reported) saturates at zero, never underflows.
+        let w = WriteStats {
+            deduplicated: 10,
+            wrong_merges: 999,
+            duplicate_events: 300,
+            ..Default::default()
+        };
+        assert_eq!(w.duplicate_collapse_rate(), Some(0.0));
+    }
+
+    #[test]
+    fn recall_at_k_never_measured_is_null_not_a_relabel() {
+        // Issue #221: with --k 1 the returned lists are one row long, so "recall@5" would just be
+        // recall@1 wearing the wrong name. It must come back None.
+        let mut q = QualityAccumulator::new();
+        let mut fact_of = HashMap::new();
+        fact_of.insert(1_i64, "f-a".to_string());
+        q.record(&[1], &fact_of, &["f-a".to_string()], &[]);
+        let s = q.summary(1);
+        assert_eq!(s.recall_at_1, Some(1.0));
+        assert!(s.recall_at_5.is_none(), "k=1 never measured the top five");
+        assert!(s.recall_at_10.is_none(), "k=1 never measured the top ten");
+        let s = q.summary(5);
+        assert_eq!(s.recall_at_5, Some(1.0));
+        assert!(s.recall_at_10.is_none());
+    }
+
+    #[test]
     fn collapse_rate_counts_recognised_repeats() {
-        let w = WriteStats { deduplicated: 150, duplicate_events: 300, ..Default::default() };
+        let w = WriteStats {
+            deduplicated: 150,
+            duplicate_events: 300,
+            ..Default::default()
+        };
         assert_eq!(w.duplicate_collapse_rate(), Some(0.5));
     }
 
@@ -344,7 +412,7 @@ mod tests {
         q.record(&[2, 1], &facts, &["new".into()], &["old".into()]);
         // Stale first: actively wrong.
         q.record(&[1, 2], &facts, &["new".into()], &["old".into()]);
-        let s = q.summary();
+        let s = q.summary(10);
         assert_eq!(s.temporal_queries, 2);
         assert_eq!(s.stale_returned, 2);
         assert_eq!(s.stale_outranked_current, 1);
@@ -357,7 +425,7 @@ mod tests {
         let facts = fact_map(&[(1, "old")]);
         let mut q = QualityAccumulator::new();
         q.record(&[1], &facts, &["new".into()], &["old".into()]);
-        let s = q.summary();
+        let s = q.summary(10);
         assert_eq!(s.stale_outranked_current, 1);
     }
 
@@ -366,7 +434,7 @@ mod tests {
         let facts = fact_map(&[(1, "a")]);
         let mut q = QualityAccumulator::new();
         q.record(&[1], &facts, &["a".into()], &[]);
-        let s = q.summary();
+        let s = q.summary(10);
         assert_eq!(s.temporal_queries, 0);
         assert!(s.stale_rate.is_none());
     }

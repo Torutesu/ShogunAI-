@@ -24,6 +24,10 @@ Before changing how memory behaves, establish what it currently does. Specifical
 
 ## Running
 
+`--db` only accepts a path that does not exist yet (stale `-wal`/`-shm` sidecars count too).
+The benchmark migrates the schema and writes synthetic events into the file it is given, so it
+requires disposable storage — it never reuses, resets, or deletes an existing database.
+
 ```bash
 # Defaults: clean workload, 100k events, 500 queries, seed 42, in-memory.
 cargo run -p memory-bench --release
@@ -84,8 +88,12 @@ are retained: a 2ms mean with a 400ms p99 is a product that feels broken, and th
 contains, not from what we submitted.
 
 **Duplicate collapse rate** — of the repeats the workload contained, the share the backend
-recognised. `null` on a clean corpus: there was no denominator, and reporting 0% would suggest a
-failure where there was nothing to detect.
+recognised **correctly**. Every reported merge is checked against the fact the row's first writer
+carried; a merge that combined two *different* facts destroyed information and is counted as a
+`wrong_merge` instead — never into the collapse rate. This is what keeps a lossy semantic-dedup
+intervention from scoring above the baseline by throwing memories away. `null` on a clean corpus:
+there was no denominator, and reporting 0% would suggest a failure where there was nothing to
+detect.
 
 **Recall@1/5/10 and MRR** — computed the same way `shogun-memory/tests/retrieval_eval.rs` computes
 them, deliberately. Two definitions of recall@5 in one repository would make the scale numbers and
@@ -95,9 +103,10 @@ the quality numbers incomparable.
 (a superseded fact outranked every correct one). The second is the sharper number: a stale row
 sitting at rank 9 is untidy, one at rank 1 is a wrong answer.
 
-**Resources** — sampled peak RSS and mean CPU% over the run, via `spike_harness::cpu`'s delta
-arithmetic. Peak RSS is a *sampled* peak; a spike between two samples is invisible to it. Mean CPU
-is an average over this benchmark's measurement window and nothing else — it is not an idle-CPU
+**Resources** — sampled peak RSS and mean CPU% over the run. Mean CPU is total CPU time over
+total wall time between the first and last reading — duration-weighted, so an unevenly sampled run
+does not skew it. Peak RSS is a *sampled* peak; a spike between two samples is invisible to it.
+Mean CPU covers this benchmark's measurement window and nothing else — it is not an idle-CPU
 figure and must never be compared against `slo::IDLE_CPU_PCT`, which is defined over a 1-minute
 idle window.
 
@@ -118,7 +127,9 @@ All of it is written into the report:
 ```
 
 `git_dirty` matters as much as `git_commit`: a run from a modified tree belongs to no commit, and
-recording it as a baseline for that SHA would be wrong.
+recording it as a baseline for that SHA would be wrong. `db_path` and `out_dir` are recorded as
+file names only — where the file lived on one contributor's disk is machine metadata, not part of
+what defines the result, and committed baselines are public.
 
 The seed drives a SplitMix64 defined in `rng.rs` rather than pulled from `rand`, whose generators
 are explicitly allowed to change output between minor versions. A stored baseline has to stay

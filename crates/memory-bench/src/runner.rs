@@ -12,7 +12,9 @@ use spike_harness::MonoClock;
 use crate::backend::{MemoryBackend, ShogunBackend};
 use crate::config::BenchConfig;
 use crate::metrics::{LatencySeries, LatencySummary, QualityAccumulator, WriteStats};
-use crate::report::{BenchReport, Environment, RunMode, StorageReport, BENCHMARK_NAME, REPORT_VERSION};
+use crate::report::{
+    BenchReport, Environment, RunMode, StorageReport, BENCHMARK_NAME, REPORT_VERSION,
+};
 use crate::resources::ResourceTracker;
 use crate::rng::Rng;
 use crate::workloads;
@@ -21,6 +23,13 @@ use crate::workloads;
 pub enum RunError {
     #[error("unknown workload {0:?} (valid: {})", crate::workloads::ALL.join(", "))]
     UnknownWorkload(String),
+    #[error(
+        "--db {0:?} already exists — refusing to touch it. The benchmark migrates the schema and \
+         writes synthetic events into whatever file it is given, so it requires disposable \
+         storage: pass a path that does not exist yet (stale -wal/-shm sidecars count too), or \
+         omit --db for an in-memory run."
+    )]
+    DbPathExists(String),
     #[error(transparent)]
     Backend(#[from] crate::backend::BackendError),
     #[error("io: {0}")]
@@ -50,9 +59,15 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     let mut resources = ResourceTracker::new();
     resources.sample(clock.elapsed_ns());
 
-    // 2. Open a fresh store. Fresh, never cleared: a `DELETE FROM` leaves the file at its high
-    //    water mark and freelist pages would make the storage numbers meaningless.
+    // 2. Open a fresh store. Fresh is enforced, not assumed: `shogun_memory::open` migrates the
+    //    schema and the ingest loop writes synthetic events into whatever file it is handed, so an
+    //    existing database — a real one most of all — must never be accepted (issue #221). Fresh
+    //    also means never cleared: a `DELETE FROM` leaves the file at its high water mark and
+    //    freelist pages would make the storage numbers meaningless.
     let in_memory = config.db_path.is_none();
+    if let Some(p) = &config.db_path {
+        refuse_existing_db(p)?;
+    }
     let mut backend = match &config.db_path {
         Some(p) => ShogunBackend::open(p)?,
         None => ShogunBackend::in_memory()?,
@@ -65,13 +80,15 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     let mut writes = WriteStats {
         submitted: 0,
         deduplicated: 0,
+        wrong_merges: 0,
         failed: 0,
         rows_after: 0,
         unique_facts: generated.unique_facts() as u64,
         duplicate_events: generated.duplicate_events() as u64,
     };
 
-    let batch = config.write_batch.max(1);
+    // Parse rejects `--write-batch 0`, so the value used is the value the report records.
+    let batch = config.write_batch;
     let mut open_batch = false;
     for (i, ev) in generated.events.iter().enumerate() {
         if i % batch == 0 {
@@ -90,10 +107,20 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
                 write_latency.record_ns(elapsed.as_nanos() as u64);
                 if o.deduplicated {
                     writes.deduplicated += 1;
+                    // The workload knows which fact this event carries and the first writer of a
+                    // row owns the mapping, so every reported merge is checkable: a merge onto a
+                    // row holding a different fact destroyed information, and must be counted
+                    // against the backend rather than into its collapse rate (issue #221).
+                    if fact_of.get(&o.event_id) != Some(&ev.fact_id) {
+                        writes.wrong_merges += 1;
+                    }
                 }
-                // First writer of a row owns the mapping. A duplicate resolves to the same row and
-                // carries the same fact, so re-inserting would be a no-op either way.
-                fact_of.entry(o.event_id).or_insert_with(|| ev.fact_id.clone());
+                // First writer of a row owns the mapping. A correct duplicate resolves to the same
+                // row and carries the same fact, so re-inserting would be a no-op; a wrong merge
+                // keeps the original owner, which is the fact the row's text actually carries.
+                fact_of
+                    .entry(o.event_id)
+                    .or_insert_with(|| ev.fact_id.clone());
             }
             // A failed write's latency is not a write latency; counting it would let an error path
             // that fails instantly flatter the p95.
@@ -156,6 +183,11 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         benchmark: BENCHMARK_NAME,
         version: REPORT_VERSION,
         config: config.clone(),
+        // What the generator actually produced. A workload can plan fewer queries than were asked
+        // for (`clean` plants at most one per event), and a report that only echoed the request
+        // would overstate the run (issue #221).
+        generated_events: generated.events.len(),
+        generated_queries: generated.queries.len(),
         environment,
         mode,
         backend: backend.name(),
@@ -164,7 +196,7 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         writes,
         write_latency: LatencySummary::of(&write_latency),
         query_latency: query_summary,
-        quality: quality.summary(),
+        quality: quality.summary(config.k),
         resources: resources.summary(),
         storage: StorageReport {
             initial_logical_bytes: initial_size.logical_bytes,
@@ -176,6 +208,23 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         slo,
         wall_seconds: clock.elapsed_ns() as f64 / 1e9,
     })
+}
+
+/// The `--db` contract (issue #221): the path must not exist, and neither may its `-wal`/`-shm`
+/// sidecars — a stale WAL would be replayed into the fresh database, silently seeding it with
+/// someone else's rows. Nothing is ever deleted, truncated, or "reset" on the caller's behalf;
+/// benchmarks require disposable storage and the caller proves it by handing over a name that
+/// holds nothing.
+fn refuse_existing_db(path: &str) -> Result<(), RunError> {
+    let mut candidates = vec![path.to_string()];
+    candidates.push(format!("{path}-wal"));
+    candidates.push(format!("{path}-shm"));
+    for c in candidates {
+        if std::path::Path::new(&c).exists() {
+            return Err(RunError::DbPathExists(c));
+        }
+    }
+    Ok(())
 }
 
 /// Write the report under `out_dir` and return the file path.

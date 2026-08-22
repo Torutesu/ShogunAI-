@@ -38,9 +38,18 @@ pub struct BenchConfig {
     pub k: usize,
     pub warmup: usize,
     /// Where the SQLite file goes. `None` runs in memory — faster, but its write latency is not
-    /// the product's write latency, and the report marks it.
+    /// the product's write latency, and the report marks it. The path must not exist yet
+    /// (`runner::run` refuses an existing file and its `-wal`/`-shm` sidecars): the benchmark
+    /// migrates and writes into whatever it is handed, so it only accepts disposable storage.
+    ///
+    /// Serialized as the file name only. Absolute paths carry usernames and machine layout, and a
+    /// committed baseline is public (issue #221); the path's identity adds nothing to
+    /// reproducibility, which is defined by (workload, seed, events, queries) + commit + profile.
+    #[serde(serialize_with = "file_name_only")]
     pub db_path: Option<String>,
     /// Directory the JSON report is written to. `None` prints the summary and writes nothing.
+    /// Serialized as the final path component only, for the same reason as `db_path`.
+    #[serde(serialize_with = "file_name_only")]
     pub out_dir: Option<String>,
     /// How many events are written inside one transaction.
     ///
@@ -49,6 +58,22 @@ pub struct BenchConfig {
     /// the bulk load is batched and this is recorded, because it means `write.p95` here is a
     /// *lower bound* on the per-capture latency, not an estimate of it.
     pub write_batch: usize,
+}
+
+/// Serialize a path as its final component. The report needs to say *that* a file-backed run
+/// happened (and `mode.in_memory` already does); where the file lived on one contributor's disk
+/// is machine metadata that has no place in a committed artifact.
+fn file_name_only<S: serde::Serializer>(v: &Option<String>, ser: S) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(p) => {
+            let name = std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.clone());
+            ser.serialize_some(&name)
+        }
+        None => ser.serialize_none(),
+    }
 }
 
 /// Default batch size for the bulk load. 1 measures the real per-write cost.
