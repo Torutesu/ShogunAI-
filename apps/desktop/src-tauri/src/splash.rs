@@ -14,7 +14,7 @@ pub mod mac {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
-    use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
     const LABEL: &str = "splash";
 

@@ -16,7 +16,7 @@ pub mod mac {
     use std::time::{Duration, Instant};
 
     use shogun_mark::{Placement, DURATION_MS};
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
 
     /// The Dock draws up to 128pt; 256px covers the 2x case without paying for 512.
     const DOCK_PX: u32 = 256;
