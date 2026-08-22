@@ -793,11 +793,8 @@ impl Db {
     /// instead of appending a near-identical row; otherwise a fresh hash makes a new event. The
     /// `content_hash` on the passed `ev` is ignored — this method decides it. Returns `(id, touched)`.
     pub fn capture_collapsed(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
-        let recents = if ev.source == "capture" {
-            self.recent_capture_bodies(ev.app_bundle_id, RECENT_DEDUP_WINDOW)
-        } else {
-            self.recent_source_bodies(ev.source, RECENT_DEDUP_WINDOW)
-        };
+        let recents =
+            self.recent_bodies_for_collapse(ev.source, ev.app_bundle_id, RECENT_DEDUP_WINDOW);
         let recent_refs: Vec<Recent<'_>> =
             recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
         // Collapse against the stored (stripped) form, not the camouflaged bytes.
@@ -807,15 +804,26 @@ impl Db {
         self.capture(&collapsed)
     }
 
-    /// Recent event bodies for one `source`, newest-first — used by near-dup collapse (FR-CAP-03).
-    fn recent_source_bodies(&self, source: &str, limit: usize) -> Vec<(String, String)> {
-        self.with_conn("event_log.recent_source_bodies", |c| event_log::recent_source_bodies(c, source, limit))
-            .unwrap_or_default()
+    /// Recent event bodies `(hash, content)` newest-first to compare against for the near-dup
+    /// collapse (FR-CAP-03). How far the candidates are scoped — source, plus app for the sources
+    /// that carry one — is the event log's call, so no caller here can widen it by accident.
+    fn recent_bodies_for_collapse(
+        &self,
+        source: &str,
+        app_bundle_id: Option<&str>,
+        limit: usize,
+    ) -> Vec<(String, String)> {
+        self.with_conn("event_log.recent_bodies_for_collapse", |c| {
+            event_log::recent_bodies_for_collapse(c, source, app_bundle_id, limit)
+        })
+        .unwrap_or_default()
     }
 
     /// Recent user notes (`source = user`), newest-first, for explicit Memory API context reads.
     pub fn recent_user_notes(&self, limit: usize) -> Vec<String> {
-        self.recent_source_bodies("user", limit)
+        // Notes carry no app attribution, so the log's scoping entry point returns the
+        // source-scoped rows for them. Going through it keeps one caller-facing door.
+        self.recent_bodies_for_collapse("user", None, limit)
             .into_iter()
             .map(|(_hash, content)| content)
             .collect()
@@ -875,11 +883,6 @@ impl Db {
         .unwrap_or_default()
     }
 
-    /// Recent capture bodies `(hash, content)` newest-first for one app, for the near-dup collapse.
-    fn recent_capture_bodies(&self, app_bundle_id: Option<&str>, limit: usize) -> Vec<(String, String)> {
-        self.with_conn("event_log.recent_capture_bodies", |c| event_log::recent_capture_bodies(c, app_bundle_id, limit))
-            .unwrap_or_default()
-    }
 
     /// Ingest a window capture end-to-end (the real capture path, FR-CAP-01/03 + WP2.7): near-dup
     /// collapse decides the hash, the event is inserted-or-touched, and on a *new* insert the
@@ -4807,6 +4810,42 @@ mod tests {
             c.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap()
         };
         assert_eq!(n, 2, "two distinct events: the collapsed body + the unrelated one");
+    }
+
+    #[test]
+    fn screen_ocr_near_duplicates_collapse_per_app_not_across_apps() {
+        // screen_ocr carries app attribution, so its collapse is app-scoped like capture's:
+        // a near-identical body read from a second app must become its own event, or that app's
+        // capture is silently absorbed into the first app's row and its attribution is lost.
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let base: String = "quarterly roadmap doc: milestones, owners, risks, dates ".repeat(10);
+        let (id_safari, t1, _) =
+            db.ingest_screen_ocr(Some("com.apple.Safari"), Some("Doc"), &base, 5, Some(1)).unwrap();
+        assert!(!t1);
+
+        // same document, ≥98% similar, read in a *different* app → a second event
+        let in_mail = format!("{base}!");
+        let (id_mail, t2, _) =
+            db.ingest_screen_ocr(Some("com.apple.Mail"), Some("Doc"), &in_mail, 5, Some(1)).unwrap();
+        assert!(!t2, "a different app must not dedup-touch the first app's row");
+        assert_ne!(id_mail, id_safari);
+
+        // the same app re-reading its own near-identical body still collapses
+        let re_read = format!("{base}?");
+        let (id_again, t3, _) = db
+            .ingest_screen_ocr(Some("com.apple.Safari"), Some("Doc"), &re_read, 3, Some(1))
+            .unwrap();
+        assert!(t3, "a near-duplicate re-read within one app must dedup-touch");
+        assert_eq!(id_again, id_safari);
+
+        let n: i64 = {
+            let c = db.conn.lock().unwrap();
+            c.query_row("SELECT count(*) FROM event_log WHERE source = 'screen_ocr'", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(n, 2, "one event per app");
     }
 
     #[test]
