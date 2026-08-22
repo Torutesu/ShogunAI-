@@ -3,6 +3,7 @@ import { HttpError, fail, ok, readJsonObject } from '@/lib/http';
 import { rateLimit } from '@/lib/rate-limit';
 import { isValidEmail } from '@/lib/referral';
 import { parseSupportReport } from '@/lib/support';
+import { resolveNotifyConfig, sendSupportNotification } from '@/lib/support-notify';
 import { withTimeout } from '@/lib/timeout';
 import { clientIp, hashIp } from '@/lib/waitlist-auth';
 
@@ -47,6 +48,14 @@ export async function POST(req: Request) {
       DB_TIMEOUT_MS,
       'support ticket insert',
     );
+
+    // Notify the operator's inbox. Deliberately after the insert and deliberately non-fatal:
+    // the report is already saved, so a mail outage must not answer the reporter with an error
+    // that invites them to send it again. `null` config = notifications switched off (no key),
+    // which is the normal state in local development and preview deploys.
+    const notify = resolveNotifyConfig(process.env);
+    if (notify) await sendSupportNotification(parsed.report, ticketId, notify);
+
     return ok({ ticket_id: ticketId });
   } catch (e) {
     console.error('support report insert error:', e);

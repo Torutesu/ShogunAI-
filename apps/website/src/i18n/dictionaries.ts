@@ -399,7 +399,7 @@ const en = {
       { h: 'Service and eligibility', p: 'ShogunAI may provide product information, early-access registration, and limited previews. You must provide accurate information, keep access details secure, and be legally able to use the service.' },
       { h: 'Acceptable use and content', p: 'Do not misuse the service, probe or disrupt its systems, bypass access controls, submit unlawful material, or use it to infringe another person’s rights. You retain rights to content you submit, while granting us the limited permission needed to operate the service.' },
       { h: 'Availability, changes, and liability', p: 'The service may change, be interrupted, or be discontinued. To the extent permitted by law, ShogunAI is provided without warranties and we are not liable for indirect or consequential loss. Nothing here limits rights that cannot legally be limited.' },
-      { h: 'Contact', p: 'Questions? Reach us at hello@shogunai.com.' },
+      { h: 'Contact', p: 'Questions? Reach us at info@shogunaios.com.' },
     ],
   },
   authority: {
@@ -488,7 +488,7 @@ const en = {
         h: 'Eligibility & fair play',
         p: 'One reward track per person and one set of social points per X handle. Burner/duplicate accounts, repeat posting, and follow-then-unfollow farming are not eligible; follows may be re-verified near reward time. Void where prohibited.',
       },
-      { h: 'Contact', p: 'Questions? Reach us at hello@shogunai.com.' },
+      { h: 'Contact', p: 'Questions? Reach us at info@shogunaios.com.' },
     ] as { h: string; p: string }[],
   },
 };
@@ -889,7 +889,7 @@ const ja: Dictionary = {
       { h: 'サービスと利用資格', p: 'ShogunAIは、製品情報、アーリーアクセス登録、限定プレビューを提供する場合があります。正確な情報を提供し、アクセス情報を安全に管理し、法的に利用できることが必要です。' },
       { h: '許可される利用とコンテンツ', p: 'サービスの悪用、システムの探索・妨害、アクセス制御の回避、違法な素材の送信、第三者の権利侵害を行わないでください。送信したコンテンツの権利は利用者に残りますが、サービス運営に必要な範囲でのみ当社に利用を許諾します。' },
       { h: '提供、変更、責任', p: 'サービスは変更、中断、終了される場合があります。法令で許される範囲で、ShogunAIは無保証で提供され、間接損害や結果的損害について責任を負いません。法的に制限できない権利を制限するものではありません。' },
-      { h: 'お問い合わせ', p: 'ご質問は hello@shogunai.com まで。' },
+      { h: 'お問い合わせ', p: 'ご質問は info@shogunaios.com まで。' },
     ],
   },
   authority: {
@@ -978,7 +978,7 @@ const ja: Dictionary = {
         h: '参加資格・フェアプレー',
         p: '特典トラックは1人1つ、ソーシャル加点は1つのXハンドルにつき1セットです。捨てアカウント・重複アカウント、繰り返し投稿、フォロー後即解除のポイント稼ぎは対象外。フォローは特典確定時に再確認する場合があります。禁止地域では無効。',
       },
-      { h: 'お問い合わせ', p: 'ご質問は hello@shogunai.com まで。' },
+      { h: 'お問い合わせ', p: 'ご質問は info@shogunaios.com まで。' },
     ],
   },
 };
@@ -1349,7 +1349,7 @@ const es: Dictionary = {
       { h: 'Servicio y elegibilidad', p: 'ShogunAI puede ofrecer información del producto, registro de acceso anticipado y vistas previas limitadas. Debes proporcionar información exacta, proteger tus credenciales y poder usar el servicio legalmente.' },
       { h: 'Uso permitido y contenido', p: 'No abuses del servicio, no interrumpas sus sistemas, no eludas controles de acceso, no envíes material ilegal ni infrinjas derechos de terceros. Conservas los derechos de tu contenido y nos concedes solo el permiso necesario para operar el servicio.' },
       { h: 'Disponibilidad, cambios y responsabilidad', p: 'El servicio puede cambiar, interrumpirse o finalizar. En la medida permitida por la ley, ShogunAI se ofrece sin garantías y no responde por pérdidas indirectas o consecuentes. Esto no limita derechos que legalmente no puedan limitarse.' },
-      { h: 'Contacto', p: '¿Preguntas? Escríbenos a hello@shogunai.com.' },
+      { h: 'Contacto', p: '¿Preguntas? Escríbenos a info@shogunaios.com.' },
     ],
   },
   authority: {
@@ -1438,7 +1438,7 @@ const es: Dictionary = {
         h: 'Elegibilidad y juego limpio',
         p: 'Una vía de recompensa por persona y un conjunto de puntos sociales por handle de X. Cuentas desechables/duplicadas, publicaciones repetidas y seguir-dejar de seguir para farmear no son elegibles; los seguimientos pueden reverificarse. Nulo donde esté prohibido.',
       },
-      { h: 'Contacto', p: '¿Preguntas? Escríbenos a hello@shogunai.com.' },
+      { h: 'Contacto', p: '¿Preguntas? Escríbenos a info@shogunaios.com.' },
     ],
   },
 };
@@ -1809,7 +1809,7 @@ const de: Dictionary = {
       { h: 'Dienst und Berechtigung', p: 'ShogunAI kann Produktinformationen, Early-Access-Registrierung und begrenzte Vorschauen anbieten. Du musst korrekte Angaben machen, Zugangsdaten schützen und den Dienst rechtmäßig nutzen dürfen.' },
       { h: 'Zulässige Nutzung und Inhalte', p: 'Missbrauche den Dienst nicht, störe Systeme nicht, umgehe keine Zugriffskontrollen, sende keine rechtswidrigen Inhalte und verletze keine Rechte Dritter. Deine Rechte an eingereichten Inhalten bleiben bestehen; wir erhalten nur die für den Betrieb nötige Erlaubnis.' },
       { h: 'Verfügbarkeit, Änderungen und Haftung', p: 'Der Dienst kann geändert, unterbrochen oder beendet werden. Soweit gesetzlich zulässig, wird ShogunAI ohne Garantien bereitgestellt und haftet nicht für indirekte oder Folgeschäden. Unabdingbare gesetzliche Rechte bleiben unberührt.' },
-      { h: 'Kontakt', p: 'Fragen? Schreib uns an hello@shogunai.com.' },
+      { h: 'Kontakt', p: 'Fragen? Schreib uns an info@shogunaios.com.' },
     ],
   },
   authority: {
@@ -1898,7 +1898,7 @@ const de: Dictionary = {
         h: 'Teilnahme & Fairplay',
         p: 'Eine Belohnungsspur pro Person und ein Satz Social-Punkte pro X-Handle. Wegwerf-/Doppelkonten, wiederholtes Posten und Folgen-dann-Entfolgen zum Farmen sind ausgeschlossen; Follows können erneut geprüft werden. Ungültig, wo verboten.',
       },
-      { h: 'Kontakt', p: 'Fragen? Schreib uns an hello@shogunai.com.' },
+      { h: 'Kontakt', p: 'Fragen? Schreib uns an info@shogunaios.com.' },
     ],
   },
 };

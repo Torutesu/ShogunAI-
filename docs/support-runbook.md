@@ -15,6 +15,7 @@ admin API（トリアージ）。本書は「届いた報告をどう処理す�
   → POST https://shogunaios.com/api/support/report (apps/website)
       - レート制限 5件/時/IP、ボディ 8KB 上限、カテゴリ・長さ・メール検証
       - support_tickets 行を作成（status = open）
+      - info@shogunaios.com へ通知メール（Resend。best-effort、失敗しても保存は成功）
   → GET/PATCH https://shogunaios.com/api/admin/support（x-admin-token）
 ```
 
@@ -24,10 +25,20 @@ admin API（トリアージ）。本書は「届いた報告をどう処理す�
 
 ## 2. トリアージ手順（対応方法）
 
-> **通知は実装していない（意図的、2026-08-22 オーナー判断）。** チケットは Postgres に
-> 溜まるだけで、メールも Slack も飛ばない。気づく手段は下の admin API を叩くことだけ
-> なので、**この日次確認を飛ばすと報告は無いのと同じ**になる。通知が必要になったら
-> Slack Incoming Webhook（依存追加なし、Workers で fetch 一発）が最短。
+> **通知先: `info@shogunaios.com`。** チケット作成時に Resend 経由でメールが飛ぶ。
+> 件名は `[bug] 本文の先頭60字…`、Reply-To は報告者のメール（記入があれば）なので、
+> 受信箱でそのまま返信すれば本人に届く。
+>
+> **ただしメールは補助であって台帳ではない。** 通知は best-effort で、失敗しても
+> 報告の保存は成功扱いになる（保存済みのものを「送り直してください」と言わせない
+> ため）。取りこぼしを拾うのは下の admin API なので、日次確認はやめないこと。
+>
+> **送信が止まる条件**（どれも報告の保存自体は成功する）:
+> - `RESEND_API_KEY` 未設定 → 通知は完全に無効。**本番で未設定だと誰にも届かない**
+> - `SUPPORT_NOTIFY_FROM` のドメインが Resend で未検証（SPF/DKIM）→ 全通信が拒否
+> - `shogunaios.com` に MX 未設定 → 送れても `info@` 側で受信できない
+>
+> 疑わしいときは Worker のログで `support notification rejected: HTTP <status>` を探す。
 
 毎営業日 1 回、open チケットを見る:
 
@@ -74,9 +85,11 @@ curl -s -X PATCH https://shogunaios.com/api/admin/support \
 
 ## 4. プライバシー境界（変えないこと）
 
-- チケット本文はユーザー著作のテキスト。**Postgres（運営 DB）にのみ**保存し、
-  分析イベント（PostHog）には件数以外を載せない。
-- email は返信のためだけに使う。GitHub Issue・ログ・分析へ転記しない。
+- チケット本文はユーザー著作のテキスト。保存先は **Postgres（運営 DB）のみ**、
+  加えて **info@shogunaios.com への通知メール**にだけ載る。分析イベント（PostHog）
+  には件数以外を載せない。
+- email は返信のためだけに使う。通知メールの Reply-To に入るのはこの用途。
+  GitHub Issue・ログ・分析へ転記しない。
 - デスクトップ側は送信成功時に traceability_log へ 1 行（route = `support`、
   digest のみ）。ロールバックは docs/migrations/V21-rollback.md。
 - 診断タプルは opt-in。デフォルト ON のチェックボックスだが、外して送れば

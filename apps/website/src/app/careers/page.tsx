@@ -34,7 +34,7 @@ export default async function CareersPage() {
           <Card className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-muted">{t.careers.noRoles}</p>
             <Button asChild variant="secondary">
-              <a href="mailto:careers@shogunai.com">{t.careers.apply}</a>
+              <a href="mailto:info@shogunaios.com">{t.careers.apply}</a>
             </Button>
           </Card>
         </div>
