@@ -182,7 +182,7 @@ pub mod mac {
                 Some(tauri::image::Image::new_owned(bytes, width, height))
             };
             if let Some(image) = image {
-                let _ = tray.set_icon(Some(image));
+                let _ = tray.set_icon_with_as_template(Some(image), true);
             }
         });
     }
