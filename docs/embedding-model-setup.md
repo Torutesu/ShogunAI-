@@ -23,16 +23,26 @@ gitignore 済み）。既にあるファイルはスキップするので、再�
 ビルドがネットワークに依存しない代わりに、`libonnxruntime.dylib` が実行時に必要。
 
 - 開発時: `brew install onnxruntime` が最も手軽
-- 配布時: `.app` の `Frameworks/` に同梱する（**同梱の packaging 手順は未実装**。TODO）
+- 配布時: **`.app` に同梱済み**。`pnpm bundle:assets`（`tauri.conf.json` の `beforeBuildCommand`
+  が呼ぶ）が `scripts/fetch-onnxruntime.sh` でダウンロードし、`bundle.resources` が
+  `Contents/Resources/libonnxruntime.dylib` に置く
+
+> **バージョンは選べない。** `ort 2.0.0-rc.10` は `ORT_API_VERSION = 22`（`ort-sys/src/lib.rs`）
+> でコンパイルされており、これは ONNX Runtime **1.22.x** を指す。ヘッダより古いランタイムは
+> `OrtApi` に null を返し、セッション構築が失敗する。`ort` を上げるときは
+> `scripts/fetch-onnxruntime.sh` の `VERSION` も一緒に上げること。
 
 **場所は自動で探す**ので、通常は環境変数を設定する必要はない。探索順:
 
 1. `ORT_DYLIB_PATH`（明示指定が常に最優先。ただし指定先が存在しなければエラーになる）
-2. `.app` 内（`Contents/Frameworks/` → `Contents/Resources/`）※アプリ起動時のみ
+2. `.app` 内（`Contents/Frameworks/` → `Contents/Resources/`）※実行ファイルが `Contents/MacOS/`
+   にあるときだけ。同梱物がシステムより先に来るので、ユーザーが無関係に `brew install onnxruntime`
+   していても、配布ビルドが検証済みバージョン以外を掴むことはない
 3. `/opt/homebrew/lib/`（Apple Silicon の Homebrew）
 4. `/usr/local/lib/` → `/opt/local/lib/` → `/usr/lib/`
 
-3以降は `OnnxEmbedder::load` の中で探すので、**アプリでもテストでも同じように効く**。
+すべて `OnnxEmbedder::load` の中で探すので、**アプリでもテストでも同じように効く**。3以降は
+開発機のパスしかないので、2 が無かった頃の配布ビルドは意味検索が必ずOFFだった。
 
 > Apple Silicon の注意: `dlopen` はライブラリ名だけ渡されると `/usr/local/lib` と `/usr/lib` しか
 > 探さず、Homebrew の `/opt/homebrew/lib` は見に行かない。`brew install onnxruntime` しただけでは

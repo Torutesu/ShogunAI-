@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev:vite",
-    "beforeBuildCommand": "pnpm build:vite"
+    "beforeBuildCommand": "pnpm build:vite && pnpm bundle:assets"
   },
   "app": {
     "macOSPrivateApi": true,
@@ -24,6 +24,11 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "resources": [
+      "models/multilingual-e5-small/model.onnx",
+      "models/multilingual-e5-small/tokenizer.json",
+      "onnxruntime/libonnxruntime.dylib"
+    ],
     "icon": [
       "icons/icon-32.png",
       "icons/icon-128.png",

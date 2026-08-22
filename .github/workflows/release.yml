@@ -153,6 +153,72 @@ jobs:
           SHOGUN_POSTHOG_KEY: ${{ secrets.SHOGUN_POSTHOG_KEY }}
         run: pnpm --filter @shogun-ai/desktop build
 
+      # The bundle now carries the local embedding model and the ONNX Runtime (tauri.conf.json
+      # `bundle.resources`, fetched by the beforeBuildCommand). Two things follow.
+      #
+      # First, assert they are actually in there. Every build before this one shipped without them
+      # and degraded to lexical search — correct behaviour for a missing model, which is exactly
+      # why nothing ever failed and nobody noticed. A silent feature loss needs a loud check.
+      #
+      # Second, sign the dylib. Nested Mach-O must carry its own signature under hardened runtime
+      # or AMFI refuses to load it, and the app would fall back to lexical search on a user's Mac
+      # after passing every check here. Signing it breaks the bundle's seal, so the .app is
+      # re-signed on top — with the same entitlements file the bundler used, or the re-sign would
+      # quietly drop them.
+      - name: verify + sign the bundled model and runtime
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP="$(ls -d target/release/bundle/macos/*.app)"
+          RES="$APP/Contents/Resources"
+          MODEL="$RES/models/multilingual-e5-small/model.onnx"
+          TOKENIZER="$RES/models/multilingual-e5-small/tokenizer.json"
+
+          # Print the layout BEFORE asserting anything. `bundle.resources` decides where these
+          # land, its two forms disagree about nesting, and a bare "missing" error sent the last
+          # round-trip guessing. Whatever breaks next, this says where the files actually went.
+          echo "--- Contents/Resources"
+          find "$RES" -maxdepth 3 \( -name '*.dylib' -o -name '*.onnx' -o -name '*.json' \) -print0 |
+            xargs -0 -r ls -lh
+
+          # The dylib is accepted wherever packaging put it, matching the search order in
+          # embed_onnx.rs bundled_runtime_dirs(); the model paths are fixed by
+          # lib.rs embedding_model_paths() and have no such latitude.
+          DYLIB=""
+          for cand in "$APP/Contents/Frameworks/libonnxruntime.dylib" \
+                      "$RES/onnxruntime/libonnxruntime.dylib" \
+                      "$RES/libonnxruntime.dylib"; do
+            [ -f "$cand" ] && { DYLIB="$cand"; break; }
+          done
+          [ -n "$DYLIB" ] || {
+            echo "::error::libonnxruntime.dylib is not in the bundle — semantic search would be off in this build"
+            exit 1
+          }
+          for f in "$MODEL" "$TOKENIZER"; do
+            test -f "$f" || {
+              echo "::error::missing from the bundle: ${f#"$APP/"} — semantic search would be off in this build"
+              exit 1
+            }
+          done
+          echo "runtime: ${DYLIB#"$APP/"}"
+
+          # The runtime must be a LOADABLE library, not the debug-symbol file of the same name that
+          # ships beside it (Mach-O filetype at byte 12: 6=MH_DYLIB, 10=MH_DSYM). A previous build
+          # bundled the dSYM, and every check downstream of here passed it — codesign signed it,
+          # notarization accepted it, Gatekeeper cleared it — until dlopen refused it on a user's
+          # Mac. fetch-onnxruntime.sh asserts this too; it is repeated on what actually ships.
+          filetype="$(od -An -t u4 -j 12 -N 4 "$DYLIB" | tr -d ' ')"
+          [ "$filetype" = "6" ] || {
+            echo "::error::bundled runtime is Mach-O filetype $filetype, not 6 (MH_DYLIB) — it will not dlopen"
+            exit 1
+          }
+
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime "$DYLIB"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime \
+            --entitlements apps/desktop/src-tauri/entitlements.plist "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
       - name: notarize app, build dmg, notarize dmg
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}

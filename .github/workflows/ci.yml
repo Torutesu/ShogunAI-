@@ -192,5 +192,17 @@ jobs:
       - run: pnpm --filter @shogun-ai/tokens build
       # tauri's generate_context! needs the frontend dist to exist at compile time.
       - run: pnpm --filter @shogun-ai/desktop build:vite
+      # tauri.conf.json declares the embedding model as a bundle resource, and
+      # generate_context! refuses to compile when a declared resource is absent. Release
+      # fetches the real 470MB model (release.yml); a compile-only job must not, so stand in
+      # a placeholder. It never runs — nothing here loads the model — but its absence would
+      # fail the build for a reason that has nothing to do with the code under test.
+      - name: placeholders for the bundled model and runtime (compile-only job)
+        run: |
+          mkdir -p apps/desktop/src-tauri/models/multilingual-e5-small
+          mkdir -p apps/desktop/src-tauri/onnxruntime
+          touch apps/desktop/src-tauri/models/multilingual-e5-small/model.onnx
+          touch apps/desktop/src-tauri/models/multilingual-e5-small/tokenizer.json
+          touch apps/desktop/src-tauri/onnxruntime/libonnxruntime.dylib
       - name: clippy the macOS shell (warnings deny via workspace lints)
         run: cargo clippy -p shogun-desktop-spike --all-targets

@@ -58,13 +58,37 @@ const RUNTIME_DIRS: &[&str] = &[
     "/usr/lib",
 ];
 
-/// Decide which runtime library to load. Pure: `exists` is injected so the decision is testable
-/// without a filesystem or an installed runtime.
+/// Where packaging puts the runtime *inside* a shipped `.app`, given the running executable at
+/// `Contents/MacOS/<bin>`.
+///
+/// This is what makes a downloaded build work on a Mac with no Homebrew: `RUNTIME_DIRS` below is
+/// entirely developer-machine paths, so without this a shipped app searches four directories that
+/// a normal user does not have and falls back to lexical search — with the model sitting right
+/// there in its own bundle.
+///
+/// Three locations, because Tauri's `bundle.resources` decides the layout and the two forms of
+/// that setting disagree: the map form (`{"onnxruntime/lib…": "./"}`) flattens to `Resources/`,
+/// the list form preserves `onnxruntime/`. `Frameworks/` is the conventional home if packaging
+/// ever moves it there. Accepting all three costs two `exists` calls and means a packaging change
+/// cannot silently turn semantic search off again.
+fn bundled_runtime_dirs(exe: Option<&Path>) -> Vec<PathBuf> {
+    let Some(contents) = exe.and_then(Path::parent).and_then(Path::parent) else {
+        return Vec::new();
+    };
+    let resources = contents.join("Resources");
+    vec![contents.join("Frameworks"), resources.join("onnxruntime"), resources]
+}
+
+/// Decide which runtime library to load. Pure: `exists` and the executable path are injected so
+/// the decision is testable without a filesystem, an installed runtime, or an app bundle.
 ///
 /// An explicit `ORT_DYLIB_PATH` always wins — but it is still checked, because a stale value would
 /// otherwise reach ort and panic, which is exactly the failure mode this function exists to remove.
+/// After that the app's own bundle is searched before any system location, so a shipped build
+/// never picks up a stray Homebrew runtime of a different version than the one it was tested with.
 fn resolve_runtime(
     explicit: Option<PathBuf>,
+    exe: Option<&Path>,
     exists: impl Fn(&Path) -> bool,
 ) -> Result<PathBuf, String> {
     if let Some(p) = explicit {
@@ -74,15 +98,20 @@ fn resolve_runtime(
             Err(format!("ORT_DYLIB_PATH points at a missing file: {}", p.display()))
         };
     }
-    RUNTIME_DIRS
+    let searched: Vec<PathBuf> = bundled_runtime_dirs(exe)
+        .into_iter()
+        .chain(RUNTIME_DIRS.iter().map(PathBuf::from))
+        .collect();
+    searched
         .iter()
-        .map(|d| Path::new(d).join(RUNTIME_LIB))
+        .map(|d| d.join(RUNTIME_LIB))
         .find(|p| exists(p))
         .ok_or_else(|| {
+            let looked: Vec<String> = searched.iter().map(|d| d.display().to_string()).collect();
             format!(
                 "{RUNTIME_LIB} not found (looked in {}) — install the ONNX Runtime \
                  (`brew install onnxruntime`) or set ORT_DYLIB_PATH",
-                RUNTIME_DIRS.join(", ")
+                looked.join(", ")
             )
         })
 }
@@ -91,7 +120,9 @@ fn resolve_runtime(
 fn ensure_runtime() -> Result<(), EmbedError> {
     let explicit = std::env::var_os("ORT_DYLIB_PATH").map(PathBuf::from);
     let already_set = explicit.is_some();
-    let path = resolve_runtime(explicit, |p| p.exists()).map_err(EmbedError::Inference)?;
+    let exe = std::env::current_exe().ok();
+    let path =
+        resolve_runtime(explicit, exe.as_deref(), |p| p.exists()).map_err(EmbedError::Inference)?;
     if !already_set {
         // Set once, at load time, on the thread that is about to build the session — before any
         // background embedding job exists to read it.
@@ -302,7 +333,7 @@ mod tests {
     fn the_runtime_is_found_where_homebrew_actually_puts_it() {
         let at = |dir: &'static str| {
             let want = Path::new(dir).join(RUNTIME_LIB);
-            resolve_runtime(None, move |p| p == want)
+            resolve_runtime(None, None, move |p| p == want)
         };
         for dir in RUNTIME_DIRS {
             assert_eq!(at(dir).as_deref(), Ok(Path::new(dir).join(RUNTIME_LIB).as_path()), "{dir}");
@@ -317,7 +348,7 @@ mod tests {
     /// carry on with lexical search.
     #[test]
     fn no_runtime_anywhere_is_a_reported_error() {
-        let err = resolve_runtime(None, |_| false).unwrap_err();
+        let err = resolve_runtime(None, None, |_| false).unwrap_err();
         assert!(err.contains(RUNTIME_LIB) && err.contains("ORT_DYLIB_PATH"), "{err}");
     }
 
@@ -325,8 +356,60 @@ mod tests {
     #[test]
     fn an_explicit_path_wins_but_is_still_checked() {
         let chosen = PathBuf::from("/somewhere/else/libonnxruntime.dylib");
-        assert_eq!(resolve_runtime(Some(chosen.clone()), |_| true), Ok(chosen.clone()));
-        assert!(resolve_runtime(Some(chosen), |_| false).is_err());
+        assert_eq!(resolve_runtime(Some(chosen.clone()), None, |_| true), Ok(chosen.clone()));
+        assert!(resolve_runtime(Some(chosen), None, |_| false).is_err());
+    }
+
+    /// A shipped `.app` carries its own runtime, and must load *that* one. Every entry in
+    /// `RUNTIME_DIRS` is a developer-machine path; on a user's Mac none of them exist, so without
+    /// the bundle search a downloaded build silently drops to lexical search while the runtime it
+    /// was built with sits inside its own bundle.
+    #[test]
+    fn a_bundled_runtime_is_found_and_beats_a_system_one() {
+        let exe = PathBuf::from("/Applications/ShogunAI.app/Contents/MacOS/shogun-desktop-spike");
+        let contents = Path::new("/Applications/ShogunAI.app/Contents");
+
+        // All three layouts `bundle.resources` can produce — the list form keeps `onnxruntime/`,
+        // the map form flattens into `Resources/`, and `Frameworks/` is the conventional home.
+        for dir in ["Frameworks", "Resources/onnxruntime", "Resources"] {
+            let want = contents.join(dir).join(RUNTIME_LIB);
+            assert_eq!(
+                resolve_runtime(None, Some(&exe), |p| p == want).as_deref(),
+                Ok(want.as_path()),
+                "a runtime in Contents/{dir} must be found",
+            );
+        }
+
+        // Both a bundled and a Homebrew runtime present: the bundle wins, so a user's unrelated
+        // `brew install onnxruntime` cannot swap the version underneath a shipped build.
+        let bundled = contents.join("Frameworks").join(RUNTIME_LIB);
+        let brew = Path::new("/opt/homebrew/lib").join(RUNTIME_LIB);
+        assert_eq!(
+            resolve_runtime(None, Some(&exe), |p| p == bundled || p == brew).as_deref(),
+            Ok(bundled.as_path()),
+        );
+
+        // Frameworks is preferred over Resources when packaging has put one in each.
+        let resources = contents.join("Resources").join(RUNTIME_LIB);
+        assert_eq!(
+            resolve_runtime(None, Some(&exe), |p| p == bundled || p == resources).as_deref(),
+            Ok(bundled.as_path()),
+        );
+    }
+
+    /// The bundle search must not misfire for a plain binary (`cargo test`, `shogun` on a PATH):
+    /// two levels up from a loose executable is an ordinary directory, and claiming a runtime
+    /// lives there would resolve to a path that does not exist.
+    #[test]
+    fn a_loose_binary_falls_through_to_the_system_directories() {
+        let exe = PathBuf::from("/usr/local/bin/shogun");
+        let brew = Path::new("/opt/homebrew/lib").join(RUNTIME_LIB);
+        assert_eq!(
+            resolve_runtime(None, Some(&exe), |p| p == brew).as_deref(),
+            Ok(brew.as_path()),
+            "a non-bundled binary still finds the system runtime"
+        );
+        assert!(bundled_runtime_dirs(None).is_empty(), "no executable path, no bundle guesses");
     }
 
     /// End-to-end against the real model. Ignored: CI has no model, and this must never depend on
