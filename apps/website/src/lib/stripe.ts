@@ -7,7 +7,7 @@
 
 import Stripe from 'stripe';
 
-import { INTERVALS, PLAN_IDS, priceIdFor } from './pricing';
+import { INTERVALS, PLAN_IDS, priceIdFor, type Interval, type PlanId } from './pricing';
 import { siteConfig } from './site';
 
 let cached: { key: string; client: Stripe } | null = null;
@@ -100,4 +100,76 @@ export function appOrigin(): string {
 export function checkoutTrialDays(): number {
   const raw = Number(process.env.STRIPE_TRIAL_DAYS ?? '0');
   return Number.isFinite(raw) && raw > 0 ? Math.min(Math.floor(raw), 30) : 0;
+}
+
+/** Everything the Checkout session needs, already resolved and validated by the route. */
+export interface CheckoutInput {
+  /** Stripe Price ID, resolved server-side from `{ plan, interval }`. Never client-supplied. */
+  readonly price: string;
+  readonly plan: PlanId;
+  readonly interval: Interval;
+  /** Funnel label ("lp" | "app"). Metadata only — never trusted for pricing. */
+  readonly source: string;
+  readonly email: string | null;
+  /** One-shot capability minted by the buying Mac, or null for the LP path. */
+  readonly claimNonce: string | null;
+  /** An existing Stripe customer for this email, so a returning buyer keeps one portal. */
+  readonly customerId: string | null;
+  readonly trialDays: number;
+  readonly automaticTax: boolean;
+  readonly origin: string;
+}
+
+/**
+ * Build the `checkout.sessions.create` params.
+ *
+ * Pure and exported so the shape is testable without a Stripe account: the mode-dependent rules
+ * below are enforced by Stripe at request time, not by the SDK's types, so a violation is a
+ * 500 on every purchase that no type-check or build would have caught.
+ *
+ * Two such rules apply here, both tied to `mode: 'subscription'`:
+ *
+ * - **`customer_creation` must never be sent.** It "can only be set in `payment` and `setup`
+ *   mode"; subscription mode *always* creates a Customer. Passing it is a hard
+ *   `StripeInvalidRequestError`, so the guest path — every first-time buyer — failed outright.
+ * - **`customer_update` requires a named customer.** It is only legal when the session already
+ *   points at one, hence it rides with `customerId` rather than with the tax block.
+ */
+export function buildCheckoutParams(input: CheckoutInput): Stripe.Checkout.SessionCreateParams {
+  const { claimNonce, customerId, email, interval, origin, plan, price, source } = input;
+
+  // Stripe cannot compute a rate without a country, hence the required address;
+  // `tax_id_collection` lets an EU/UK business supply a VAT number, which moves that sale to
+  // reverse charge instead of us collecting.
+  const tax: Stripe.Checkout.SessionCreateParams = input.automaticTax
+    ? {
+        automatic_tax: { enabled: true },
+        billing_address_collection: 'required',
+        tax_id_collection: { enabled: true },
+      }
+    : {};
+
+  return {
+    mode: 'subscription',
+    line_items: [{ price, quantity: 1 }],
+    ...tax,
+    ...(customerId
+      ? {
+          customer: customerId,
+          ...(input.automaticTax ? { customer_update: { address: 'auto', name: 'auto' } } : {}),
+        }
+      : email
+        ? { customer_email: email }
+        : {}),
+    allow_promotion_codes: true,
+    ...(email ? { client_reference_id: email } : {}),
+    // The webhook reads these back to attach the subscription to the right plan and buyer.
+    metadata: { plan, interval, source, ...(claimNonce ? { claim_nonce: claimNonce } : {}) },
+    subscription_data: {
+      metadata: { plan, interval, source },
+      ...(input.trialDays > 0 ? { trial_period_days: input.trialDays } : {}),
+    },
+    success_url: `${origin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/#pricing`,
+  };
 }
