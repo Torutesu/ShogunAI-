@@ -146,11 +146,10 @@ function prefersStillness(): boolean {
 function useRefold(
   svgRef: React.RefObject<SVGSVGElement>,
   shape: MarkShape | undefined,
-): { onPointerEnter: () => void; onPointerLeave: () => void } {
+  hoverWithin: string | undefined,
+): void {
   const frame = useRef(0);
   const at = useRef(0);
-
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
   const draw = useCallback(
     (t: number) => {
@@ -187,7 +186,20 @@ function useRefold(
     [draw, shape],
   );
 
-  return { onPointerEnter: () => run(1), onPointerLeave: () => run(0) };
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || !shape) return;
+    const host: Element = hoverWithin ? (svg.closest(hoverWithin) ?? svg) : svg;
+    const enter = (): void => run(1);
+    const leave = (): void => run(0);
+    host.addEventListener("pointerenter", enter);
+    host.addEventListener("pointerleave", leave);
+    return () => {
+      host.removeEventListener("pointerenter", enter);
+      host.removeEventListener("pointerleave", leave);
+      cancelAnimationFrame(frame.current);
+    };
+  }, [hoverWithin, run, shape, svgRef]);
 }
 
 /**
@@ -200,6 +212,9 @@ function useRefold(
  * exists. It replaces `interactive` rather than stacking with it: both answer the pointer, and two
  * answers to one gesture is one too many.
  *
+ * `hoverWithin` hands the trigger to an ancestor. A 24px mark beside its wordmark is a hard thing
+ * to hover on purpose, and the pair reads as one brand, so the pair should answer as one.
+ *
  * Restarting the fold is the caller's job, and React already has the verb for it: change the
  * element's `key` and the animation runs again from a fresh node.
  */
@@ -208,16 +223,19 @@ export function AnimatedLogo({
   motion = "unfold",
   interactive = false,
   morphTo,
+  hoverWithin,
   className,
 }: {
   size?: number;
   motion?: MarkMotion;
   interactive?: boolean;
   morphTo?: MarkShape;
+  /** Selector for the ancestor whose hover drives the refold. Defaults to the mark itself. */
+  hoverWithin?: string;
   className?: string;
 }): JSX.Element {
   const svgRef = useRef<SVGSVGElement>(null);
-  const refold = useRefold(svgRef, morphTo);
+  useRefold(svgRef, morphTo, hoverWithin);
 
   const classes = [
     "shogun-mark",
@@ -235,7 +253,6 @@ export function AnimatedLogo({
       className={classes.join(" ")}
       role="img"
       aria-label="ShogunAI"
-      {...(morphTo ? refold : null)}
     >
       <g transform="translate(0 171.5)">
         <MarkFacets />

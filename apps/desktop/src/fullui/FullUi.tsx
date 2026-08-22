@@ -55,7 +55,7 @@ export function FullUi({ view }: { view: FullUiView }): JSX.Element {
       <div className="full__body">
         <nav className="side">
           <div className="side__brand">
-            <AnimatedLogo size={24} interactive />
+            <AnimatedLogo size={24} morphTo="heart" hoverWithin=".side__brand" />
             <span className="side__name">ShogunAI</span>
           </div>
           {view.plan !== "pro" && <span className="side__plan">{planLabel(view.plan)}</span>}

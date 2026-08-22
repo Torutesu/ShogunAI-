@@ -875,26 +875,13 @@ html[data-theme='dark'] .theme-light-badge {
     transform: none;
   }
 }
-@keyframes logo-breathe {
-  0%,
-  100% {
-    transform: rotate(0deg);
-  }
-  50% {
-    transform: rotate(-8deg) scale(1.06);
-  }
-}
-/* Pop the mark in on load; playful wiggle on brand hover */
+/* Pop the mark in on load. Brand hover no longer wiggles the mark: it refolds it into a heart,
+   which components/AnimatedLogo.tsx drives on the paths themselves. */
 .brand-logo {
   animation: logo-pop 0.7s var(--ease-out-soft) both;
-  transition: transform 0.3s var(--ease-out-soft);
-}
-.group\/brand:hover .brand-logo {
-  animation: logo-breathe 0.6s var(--ease-out-soft);
 }
 @media (prefers-reduced-motion: reduce) {
-  .brand-logo,
-  .group\/brand:hover .brand-logo {
+  .brand-logo {
     animation: none;
   }
 }

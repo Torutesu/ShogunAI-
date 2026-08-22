@@ -104,7 +104,7 @@ describe("the refold", () => {
     const { container } = render(<AnimatedLogo motion="static" morphTo="heart" />);
     const svg = container.querySelector("svg") as SVGSVGElement;
 
-    fireEvent.pointerOver(svg, { relatedTarget: document.body });
+    fireEvent.pointerEnter(svg);
     settle();
 
     expect(drawn(container, "peak")).toEqual(["M368 50L469 252L469 690Z", "M368 50L469 252L469 690Z"]);
@@ -116,9 +116,9 @@ describe("the refold", () => {
     const { container } = render(<AnimatedLogo motion="static" morphTo="heart" />);
     const svg = container.querySelector("svg") as SVGSVGElement;
 
-    fireEvent.pointerOver(svg, { relatedTarget: document.body });
+    fireEvent.pointerEnter(svg);
     settle();
-    fireEvent.pointerOut(svg, { relatedTarget: document.body });
+    fireEvent.pointerLeave(svg);
     settle();
 
     expect(drawn(container, "peak")[0]).toBe("M296 254L469 0L469 525Z");
@@ -131,7 +131,7 @@ describe("the refold", () => {
     const { container } = render(<AnimatedLogo motion="static" morphTo="heart" />);
     const svg = container.querySelector("svg") as SVGSVGElement;
 
-    fireEvent.pointerOver(svg, { relatedTarget: document.body });
+    fireEvent.pointerEnter(svg);
     settle();
 
     expect(drawn(container, "peak")[0]).toBe("M296 254L469 0L469 525Z");
