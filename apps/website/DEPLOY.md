@@ -39,7 +39,7 @@ so you see exactly what Cloudflare will run. Put local secrets in
 `apps/website/.dev.vars` (git-ignored):
 
 ```
-DATABASE_URL=postgres://...supabase-session-pooler...:6543/postgres
+DATABASE_URL=postgres://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
 ```
 
 ## Cloudflare build & deploy commands (monorepo — important)
@@ -91,7 +91,7 @@ Set these per-environment (dashboard → Settings → Variables, or `wrangler se
 
 | Name | Where | Value |
 | --- | --- | --- |
-| `DATABASE_URL` | prod + preview | Supabase **session pooler** connection string. Required for live count and waitlist signup. |
+| `DATABASE_URL` | prod + preview | Supabase **session pooler** connection string (port `5432`, not `6543` — see below). Required for waitlist signup and all billing routes. |
 | `NEXT_PUBLIC_APP_ORIGIN` | prod | e.g. `https://shogunai.com` |
 | `LOGO_DEV_TOKEN` | prod + preview | Logo.dev token. Kept server-side by `/api/brand-logo/*`; never use a `NEXT_PUBLIC_*` variable. |
 
@@ -99,9 +99,15 @@ Set these per-environment (dashboard → Settings → Variables, or `wrangler se
 
 `postgres.js` needs a TCP connection. Two options:
 
-1. **Simplest:** set `DATABASE_URL` to the Supabase **session pooler** URL (port
-   `6543`). With `nodejs_compat` enabled (already in `wrangler.jsonc`) the Worker can
-   open the TCP socket directly.
+1. **Simplest:** set `DATABASE_URL` to the Supabase **session pooler** URL — host
+   `aws-0-<region>.pooler.supabase.com`, port **`5432`**. With `nodejs_compat` enabled
+   (already in `wrangler.jsonc`) the Worker can open the TCP socket directly.
+
+   Use the **session** pooler, not the transaction pooler on `6543`. `src/db/index.ts`
+   creates the client without `prepare: false`, so postgres.js uses prepared statements —
+   which the transaction pooler does not support. Pointing `DATABASE_URL` at `6543`
+   connects and authenticates fine, then fails once queries start, which is the most
+   expensive way to be wrong. Switch to `6543` only together with `prepare: false`.
 2. **Lower latency (recommended for prod):** create a **Cloudflare Hyperdrive** config
    pointing at the same Supabase database, bind it in `wrangler.jsonc`, and set
    `DATABASE_URL` to the Hyperdrive connection string. No app code change is needed —
