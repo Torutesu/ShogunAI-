@@ -73,15 +73,10 @@ impl Mic {
 /// expose a stable cross-platform device identifier; an exact name match avoids guessing after a
 /// device is unplugged or renamed.
 ///
-/// Identical names stay one row but are marked ambiguous. `find_named_device` refuses to resolve
-/// them rather than silently capturing whichever one CoreAudio enumerated first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InputDeviceChoice {
-    pub name: String,
-    pub ambiguous: bool,
-}
-
-pub fn input_device_choices() -> Result<Vec<InputDeviceChoice>, String> {
+/// Identical names collapse into one row here. That leaves the selection ambiguous when two
+/// devices share a name, so `find_named_device` refuses to resolve it rather than silently
+/// capturing whichever one CoreAudio enumerated first.
+pub fn input_device_names() -> Result<Vec<String>, String> {
     let host = cpal::default_host();
     let mut names = host
         .input_devices()
@@ -89,27 +84,8 @@ pub fn input_device_choices() -> Result<Vec<InputDeviceChoice>, String> {
         .filter_map(|device| device.name().ok())
         .collect::<Vec<_>>();
     names.sort_unstable();
-    let mut choices: Vec<InputDeviceChoice> = Vec::new();
-    for name in names {
-        if let Some(previous) = choices.last_mut() {
-            if previous.name == name {
-                previous.ambiguous = true;
-                continue;
-            }
-        }
-        choices.push(InputDeviceChoice {
-            name,
-            ambiguous: false,
-        });
-    }
-    Ok(choices)
-}
-
-pub fn input_device_names() -> Result<Vec<String>, String> {
-    Ok(input_device_choices()?
-        .into_iter()
-        .map(|choice| choice.name)
-        .collect())
+    names.dedup();
+    Ok(names)
 }
 
 fn push_resampled<T>(

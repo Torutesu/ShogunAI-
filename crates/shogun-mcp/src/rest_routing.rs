@@ -109,16 +109,6 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
             ),
             Err(_) => Err(RouteMiss::NotFound),
         },
-        ["v1", "meeting", "microphone"] => match method {
-            Method::Get => Ok(Routed::Read {
-                tool: Tool::MeetingMicrophoneGet,
-                id: None,
-            }),
-            Method::Post => Ok(Routed::Write {
-                tool: Tool::MeetingMicrophoneSet,
-                level: Level::L1,
-            }),
-        },
         ["v1", "device", "onboarding"] => method_is(
             method,
             Method::Get,

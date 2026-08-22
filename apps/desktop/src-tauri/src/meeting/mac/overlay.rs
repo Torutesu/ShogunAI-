@@ -19,9 +19,9 @@ const BAR_SIZE: (f64, f64) = (400.0, 88.0);
 /// In-meeting black control capsule only (content panels are separate windows).
 /// Height includes top inset for bar-slot tooltips (they sit above the 52px bar).
 const PILL_SIZE: (f64, f64) = (320.0, 100.0);
-/// Host pill enlarged for the detached meeting quick-settings card.
-/// Includes the full card, 24px gap, 52px pill, and 8px bottom inset.
-const PILL_WITH_MENU_SIZE: (f64, f64) = (360.0, 464.0);
+/// Host pill enlarged so `.ov__modemenu--bar` (+ lang row) fits above the capsule.
+/// Rough: tip pad 36 + menu (~3×36 + lang row + pad) + gap 8 + pill 52 + bottom pad 8 ≈ 280.
+const PILL_WITH_MENU_SIZE: (f64, f64) = (320.0, 280.0);
 /// Host bar mode-menu open — `recording_overlay_size` must grow or sync fights the FE.
 static HOST_MENU_OPEN: AtomicBool = AtomicBool::new(false);
 /// Live captions window default (own NSWindow — not stacked in the host).
@@ -162,9 +162,6 @@ fn configure_overlay_window(win: &tauri::WebviewWindow, opaque: bool) {
             let _: () = msg_send![ptr, setBackgroundColor: clear];
         }
         let _: () = msg_send![ptr, setHasShadow: false];
-        // Default: meeting surfaces remain available to normal window/screen capture.
-        let sharing_type: usize = 1; // NSWindowSharingReadOnly
-        let _: () = msg_send![ptr, setSharingType: sharing_type];
         let _: () = msg_send![ptr, setCollectionBehavior: behavior];
         let _: () = msg_send![ptr, setLevel: level];
         let _: () = msg_send![ptr, setHidesOnDeactivate: false];
@@ -207,28 +204,6 @@ fn set_overlay_ignores_mouse(win: &tauri::WebviewWindow, ignores: bool) {
 fn apply_overlay_interactive(win: &tauri::WebviewWindow) {
     let interactive = OVERLAY_WANTS_INTERACTIVE.load(Ordering::SeqCst);
     set_overlay_ignores_mouse(win, !interactive);
-}
-
-/// Exclude every meeting surface from macOS screen sharing while keeping it visible locally.
-pub(super) fn meeting_set_overlay_stealth(app: tauri::AppHandle, enabled: bool) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        // NSWindowSharingNone prevents capture; it does not hide or order out the window.
-        let sharing_type: usize = if enabled { 0 } else { 1 };
-        for label in [WINDOW_LABEL, WIN_CC, WIN_CANVAS, WIN_CHAT] {
-            let Some(win) = handle.get_webview_window(label) else {
-                continue;
-            };
-            let Some(ptr) = overlay_ns_window(&win) else {
-                continue;
-            };
-            // SAFETY: live NSWindow accessed on the AppKit main thread.
-            unsafe {
-                let _: () = objc2::msg_send![ptr, setSharingType: sharing_type];
-            }
-        }
-        eprintln!("[meeting] screen-share stealth={enabled}");
-    });
 }
 
 fn overlay_monitor(win: &tauri::WebviewWindow) -> Option<tauri::Monitor> {

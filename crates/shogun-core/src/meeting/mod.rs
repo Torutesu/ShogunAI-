@@ -15,7 +15,4 @@ pub mod minutes;
 #[cfg(feature = "db")]
 pub mod recap;
 pub mod settings;
-/// Shared on-disk meeting-settings store. Desktop, MCP, CLI, and REST use this one file so a
-/// microphone selected through any supported face is applied by the desktop capture lane.
-pub mod settings_store;
 pub mod statemachine;

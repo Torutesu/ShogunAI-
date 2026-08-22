@@ -77,8 +77,6 @@ pub enum Command {
         body: String,
     },
     VoiceDictionary(VoiceDictionaryCommand),
-    /// `shogun meeting microphone show|set <name>|default`.
-    MeetingMicrophone(MeetingMicrophoneCommand),
     /// `shogun help` / no args.
     Help,
     /// `shogun config path|show|validate`
@@ -138,12 +136,6 @@ pub enum VoiceDictionaryCommand {
     Delete { id: i64 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MeetingMicrophoneCommand {
-    Show,
-    Set { microphone: Option<String> },
-}
-
 impl Command {
     /// The Memory API tool this command invokes, if any. `api status` and `help` are local CLI
     /// concerns and map to no tool.
@@ -199,8 +191,6 @@ impl Command {
             Command::VoiceDictionary(VoiceDictionaryCommand::Delete { .. }) => {
                 Tool::VoiceDictionaryDelete
             }
-            Command::MeetingMicrophone(MeetingMicrophoneCommand::Show) => Tool::MeetingMicrophoneGet,
-            Command::MeetingMicrophone(MeetingMicrophoneCommand::Set { .. }) => Tool::MeetingMicrophoneSet,
             Command::ApiStatus | Command::Metrics | Command::Help | Command::Config { .. } => {
                 return None
             }
@@ -246,7 +236,6 @@ COMMANDS:
     whoami                    Profile + compact work summary
     profile set <json>        Update profile preferences   (L1)
     voice-dictionary list|create|update|delete  Manage local vocabulary (L1 writes)
-    meeting microphone show|set <name>|default  Manage meeting capture input (L1 set)
     config path|show|validate Show the Shougun.md path, parsed config, or validation
     help                      This help
 
