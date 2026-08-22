@@ -370,9 +370,9 @@ We validated it the direct way: we ran our own company on it, put it in the hand
 ```
 Our competitors fall into four groups.
 
-Memory and context tools — Goldfish, Screenpipe, Littlebird, Unabyss. They record context but cannot execute work. Execution tools — Codex, Cursor, Dex, Aside. They execute, but only understand the context visible inside their own environment. AI-native collaboration products — PromptQL, Ando, Oasis. They aim at a "company brain," but only from conversations and documents that live inside their own platform. AI-native business applications — Monaco, Octolane, Origami. They rebuild CRM and GTM for the AI era, but each stays self-contained in its functional domain.
+Memory and context tools — Goldfish, Screenpipe, Littlebird, Unabyss. They record context but cannot execute work. Execution tools and agent runtimes — Codex, Cursor, Dex, Aside, and self-hosted autonomous agents like Hermes (Nous Research). They execute, and the newest of them even persist and self-improve — Hermes writes a skill document every time it solves a hard problem. But what grows is procedural memory: how to do things. Their knowledge of *you* is limited to what passed through their own sessions, and your work doesn't happen inside an agent's sessions. AI-native collaboration products — PromptQL, Ando, Oasis. They aim at a "company brain," but only from conversations and documents that live inside their own platform. AI-native business applications — Monaco, Octolane, Origami. They rebuild CRM and GTM for the AI era, but each stays self-contained in its functional domain.
 
-What we understand that they don't: the context that matters doesn't live inside any application. It exists across everything done on a computer — AI conversations, the browser, documents, email, meetings, desktop apps — and much of it evaporates before it's ever typed into Slack or a CRM. So we build the layer, not another app. A context layer can host every AI-native application on top of it; the reverse construction is impossible.
+What we understand that they don't: the context that matters doesn't live inside any application — or any agent's session log. It exists across everything done on a computer — AI conversations, the browser, documents, email, meetings, desktop apps — and much of it evaporates before it's ever typed into Slack or a CRM. So we build the layer, not another app. A context layer can host every AI-native application on top of it; the reverse construction is impossible.
 
 And on the "company brain": it isn't a product you build by collecting documents after the fact. Companies don't think — people do. It emerges when each individual's world model of their work connects under the right permissions. That's why we start with one person, and why the individual product isn't a wedge — it's the foundation.
 ```
@@ -380,9 +380,9 @@ And on the "company brain": it isn't a product you build by collecting documents
 **JA**
 > 競合は4つのグループに分かれます。
 >
-> 記憶・文脈系（Goldfish, Screenpipe, Littlebird, Unabyss）。文脈を記録しますが、仕事を実行できません。実行系（Codex, Cursor, Dex, Aside）。実行はできますが、自分の環境の中に見える文脈しか理解しません。AI ネイティブなコラボレーション系（PromptQL, Ando, Oasis）。「Company Brain」を狙っていますが、自社プラットフォーム内の会話と文書しか扱えません。AI ネイティブな業務アプリ系（Monaco, Octolane, Origami）。CRM や GTM を AI 時代に作り直していますが、それぞれ自分の職能領域に閉じています。
+> 記憶・文脈系（Goldfish, Screenpipe, Littlebird, Unabyss）。文脈を記録しますが、仕事を実行できません。実行系とエージェント・ランタイム（Codex, Cursor, Dex, Aside、そして Hermes〈Nous Research〉のような自己ホスト型の自律エージェント）。実行はでき、最新のものは持続と自己改善までします——Hermes は難問を解くたびにスキル文書を書き残します。ただし育つのは手続き記憶＝「どうやるか」です。彼らが「あなた」について知っているのは自分のセッションを通過した分だけで、あなたの仕事はエージェントのセッションの中では起きていません。AI ネイティブなコラボレーション系（PromptQL, Ando, Oasis）。「Company Brain」を狙っていますが、自社プラットフォーム内の会話と文書しか扱えません。AI ネイティブな業務アプリ系（Monaco, Octolane, Origami）。CRM や GTM を AI 時代に作り直していますが、それぞれ自分の職能領域に閉じています。
 >
-> 私たちが理解していて彼らが理解していないこと。価値のある文脈は、どのアプリケーションの中にも存在しません。それはコンピュータ上のすべての営み——AI との会話、ブラウザ、文書、メール、会議、デスクトップアプリ——にまたがって存在し、その多くは Slack や CRM に打ち込まれる前に蒸発します。だから私たちはアプリではなく層を作ります。コンテキスト層の上にはあらゆる AI ネイティブアプリを載せられますが、逆方向の構築は不可能です。
+> 私たちが理解していて彼らが理解していないこと。価値のある文脈は、どのアプリケーションの中にも、どのエージェントのセッションログの中にも存在しません。それはコンピュータ上のすべての営み——AI との会話、ブラウザ、文書、メール、会議、デスクトップアプリ——にまたがって存在し、その多くは Slack や CRM に打ち込まれる前に蒸発します。だから私たちはアプリではなく層を作ります。コンテキスト層の上にはあらゆる AI ネイティブアプリを載せられますが、逆方向の構築は不可能です。
 >
 > そして「Company Brain」について。それは文書を後から集めて作るプロダクトではありません。会社は考えません。考えるのは人です。一人ひとりの仕事のワールドモデルが、適切な権限の下で接続されたときに、結果として立ち現れるものです。だから私たちは個人から始めます。個人向けプロダクトはくさびではなく、土台そのものです。
 </br>
@@ -529,6 +529,11 @@ On structure: Select, Inc. (Japan), founder holds 90%, one pre-seed investor (TH
 > **EN**: I won't do a feature grid on someone else's product, but the categorical difference is this: recorders and lifeloggers end at "found it." Here memory is the fuel — it keeps a live model of your work, each record with a source and a confidence, and the output is a finished draft or a scheduled hold, not a search result.
 >
 > **JA**: 他社のプロダクトと機能表で比べることはしませんが、カテゴリとしての違いははっきりしています。記録系のゴールは「見つかった」です。こちらでは記憶は燃料で、仕事の状態を根拠と確度付きで持ち、出てくるのは検索結果ではなく完成した下書きや確保済みの予定です。
+
+**Q8-b. Hermes（自律エージェント系）と何が違うの？（名指しで来たら。実行系エージェント全般に流用可）**
+> **EN**: Hermes is a genuinely good project and it's aimed at the same future — agents that persist, remember, and act. The line between us is which memory grows. Hermes learns from its own sessions: every task you hand it makes it better at doing. But your work doesn't happen inside an agent's sessions — the thread you read, the meeting you sat in, the decision you made on screen all happen outside it, so it still starts your day by asking. ShogunAI holds the state of the day itself — people, promises, open loops, built passively whether or not you talk to any agent — and serves it over MCP. So it's less either/or than layers: point Hermes at ShogunAI and it stops asking you questions. They bring the hands; we bring the world.
+>
+> **JA**: Hermes は本当に良いプロジェクトで、目指している未来——持続し、記憶し、実行するエージェント——は同じ側です。分かれ目は「どちらの記憶が育つか」です。Hermes は自分のセッションから学びます。タスクを渡すほど「やり方」は上手くなる。でも、あなたの仕事はエージェントのセッションの中では起きていません。読んだスレッドも、出た会議も、画面の上で下した判断も、全部その外側で起きます。だから一日の始まりには、やはりあなたに聞くところから始まる。ShogunAI が持つのは一日そのものの状態——人、約束、やりかけ——で、エージェントと話していようがいまいが受動的に育ち、MCP で開いています。つまり二者択一というより層の関係です。Hermes を ShogunAI に繋げば、質問される側からされない側に変わります。手足は彼らが、世界はこちらが持つ。
 
 **Q9. モデルのラッパーでは**
 > **EN**: The model part is a wrapper — deliberately, you bring your own. What isn't: passive capture at the OS level, a world model where every record carries its source and confidence, forgetting by design, and an approval gate on anything outbound. Swap the model tomorrow and the memory is still yours, on your disk. That's the asset.
