@@ -1264,7 +1264,7 @@ export function MeetingOverlay(): JSX.Element | null {
               {t.meetingMore}
             </span>
             {moreOpen ? createPortal(
-              <div className="ov__moremenu" role="dialog" aria-label={t.meetingMore}>
+              <div className="ov__moremenu" role="dialog" aria-label={t.meetingMore} data-no-drag>
                 {morePage === "root" ? (
                   <>
                     <div className="ov__more-stealth">
