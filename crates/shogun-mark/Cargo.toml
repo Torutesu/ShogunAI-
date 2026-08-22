@@ -1,0 +1,21 @@
+[package]
+name = "shogun-mark"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "The ShogunAI mark as geometry and coverage — the folding artwork, drawn without a webview."
+
+# Platform-free on purpose. The Dock and menu-bar icons are drawn by AppKit, not by our webview,
+# so the fold the webview does in CSS has to exist a second time in Rust. Keeping that second copy
+# in its own crate means Linux CI clippy-checks and tests it, which the macOS shell never gets.
+[dependencies]
+
+# Decoding the shipped icon, only so a test can prove the fold's last frame lands on it. Nothing
+# in the crate's own surface touches a file format.
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[lints]
+workspace = true
