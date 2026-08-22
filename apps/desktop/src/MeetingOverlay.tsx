@@ -122,8 +122,8 @@ function defaultPanelSize(surface: MeetingSurface): { w: number; h: number } {
 
 /** Host pill — match Rust `PILL_SIZE` / `PILL_WITH_MENU_SIZE`. */
 const HOST_PILL_SIZE = { w: 320, h: 100 } as const;
-/** Full quick-settings card opens upward above the host pill. */
-const HOST_PILL_WITH_MENU_SIZE = { w: 360, h: 430 } as const;
+/** Full quick-settings card floats independently above the host pill. */
+const HOST_PILL_WITH_MENU_SIZE = { w: 360, h: 464 } as const;
 
 const MODES: MeetingMode[] = ["transcription", "one_way", "two_way"];
 const LANGS: MeetingLanguage[] = ["auto", "english", "japanese"];

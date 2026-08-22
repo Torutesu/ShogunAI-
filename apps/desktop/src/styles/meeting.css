@@ -375,6 +375,10 @@
 .ov--live-pill .ov__bar-wrap {
   pointer-events: auto;
 }
+/* More is a separate floating card, not an extension of the control pill. */
+.ov--live-pill:has(.ov__moremenu) {
+  padding-top: 8px;
+}
 /* Wrap = black pill only in flow. Grip is absolute — cannot push icons. */
 .ov__bar-wrap {
   position: relative;
@@ -768,9 +772,11 @@
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 .ov__moremenu {
-  position: absolute;
+  /* Fixed to the transparent host, rather than the More button. This keeps a
+     deliberate gap between two independent surfaces. */
+  position: fixed;
   left: 50%;
-  bottom: calc(100% + 10px);
+  bottom: 76px;
   z-index: 30;
   width: 320px;
   box-sizing: border-box;
