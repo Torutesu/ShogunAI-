@@ -5225,7 +5225,7 @@ function PrivacySecuritySection(props: {
       </div>
       <div className="set__hint">
         <a
-          href="https://shogunai.app/privacy"
+          href="https://shogunaios.com/privacy"
           target="_blank"
           rel="noopener noreferrer"
         >

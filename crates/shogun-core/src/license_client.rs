@@ -63,7 +63,14 @@ impl VerifyError {
 }
 
 /// Default licence API origin. Overridable with `SHOGUN_LICENSE_API` for staging and dev.
-pub const DEFAULT_LICENSE_API: &str = "https://syogun.com";
+///
+/// This is the deployed site — the `shogunaios.com` custom domain of the website Worker
+/// (`apps/website/wrangler.jsonc`), which is what actually serves `/api/license/*` and
+/// `/api/stripe/*`. It previously read `syogun.com`, a host that does not resolve, so every
+/// call built from this constant failed at DNS: verification, Checkout, the Customer Portal and
+/// the licence claim alike. Release builds ignore `SHOGUN_LICENSE_API`, so this constant is the
+/// only production value — keep it in step with the Worker's routes.
+pub const DEFAULT_LICENSE_API: &str = "https://shogunaios.com";
 
 /// The verification endpoint for a given origin.
 /// The cached licence token for THIS device, if it currently entitles the device.
@@ -291,7 +298,7 @@ mod tests {
 
     #[test]
     fn builds_the_endpoint_without_doubling_slashes() {
-        assert_eq!(verify_url("https://syogun.com/"), "https://syogun.com/api/license/verify");
+        assert_eq!(verify_url("https://shogunaios.com/"), "https://shogunaios.com/api/license/verify");
         assert_eq!(verify_url("http://localhost:3000"), "http://localhost:3000/api/license/verify");
     }
 

@@ -8,7 +8,7 @@
 non-additive。V18 と同型のテーブル再作成＋全行コピー。列の削除・改名・型変更なし。
 `idx_traceability_ts` を張り直す。外部キー参照なし。
 
-`support` に `third_party` は付けない — 送信先は運営自身のインフラ（syogun.com の
+`support` に `third_party` は付けない — 送信先は運営自身のインフラ（shogunaios.com の
 support intake）であり、第三者中継を挟まない。本文はユーザーが自分で書いた
 レポートで、台帳にはバイト数と digest のみ残る（本文は保存しない。G8）。
 

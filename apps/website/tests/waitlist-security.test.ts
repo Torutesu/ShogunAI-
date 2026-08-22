@@ -31,7 +31,7 @@ function withEnv(env: Record<string, string | undefined>, fn: () => void) {
   }
 }
 
-const SITE = 'https://syogun.com/api/waitlist/signup';
+const SITE = 'https://shogunaios.com/api/waitlist/signup';
 
 test('unset allowlist DENIES cross-origin requests (fail closed)', () => {
   withEnv({ WAITLIST_ALLOWED_ORIGINS: undefined, WAITLIST_WEBHOOK_SECRET: undefined }, () => {
@@ -56,7 +56,7 @@ test('unset allowlist denies even SAME-ORIGIN requests outside development', () 
     const prev = process.env.NODE_ENV;
     try {
       delete process.env.NODE_ENV;
-      assert.equal(isAuthorizedOrigin(post(SITE, { origin: 'https://syogun.com' })), false);
+      assert.equal(isAuthorizedOrigin(post(SITE, { origin: 'https://shogunaios.com' })), false);
       process.env.NODE_ENV = 'development';
       const dev = post('http://localhost:3000/api/waitlist/signup', { origin: 'http://localhost:3000' });
       assert.equal(isAuthorizedOrigin(dev), true);
@@ -68,8 +68,8 @@ test('unset allowlist denies even SAME-ORIGIN requests outside development', () 
 });
 
 test('configured allowlist admits listed origins and rejects the rest', () => {
-  withEnv({ WAITLIST_ALLOWED_ORIGINS: 'https://syogun.com', WAITLIST_WEBHOOK_SECRET: undefined }, () => {
-    assert.equal(isAuthorizedOrigin(post(SITE, { origin: 'https://syogun.com' })), true);
+  withEnv({ WAITLIST_ALLOWED_ORIGINS: 'https://shogunaios.com', WAITLIST_WEBHOOK_SECRET: undefined }, () => {
+    assert.equal(isAuthorizedOrigin(post(SITE, { origin: 'https://shogunaios.com' })), true);
     assert.equal(isAuthorizedOrigin(post(SITE, { origin: 'https://evil.example' })), false);
     // Explicit allowlist wins: same-origin fallback is not consulted.
     const other = post('http://localhost:3000/api/waitlist/signup', { origin: 'http://localhost:3000' });

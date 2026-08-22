@@ -2,7 +2,7 @@
 
 > この文書は SHOGUN が「何を・どこに保存し・何に使い・何には使わないか」を正確に説明する正典です。技術者・情報システム部門向けの説明資料として、Keychain / SQLite / Anthropic 等の必要な固有名は正確性のためそのまま記載します。
 >
-> **アプリ内からの導線**: 設定 → 「Privacy & Security」→ Data policy カードの「Read the full privacy policy」リンクから到達できます。現在このリンクは LP のプライバシーページ（`https://shogunai.app/privacy`）を指していますが、**公開 URL は確定前**です。最終的にはこの文書または LP の該当ページのいずれかを指します。
+> **アプリ内からの導線**: 設定 → 「Privacy & Security」→ Data policy カードの「Read the full privacy policy」リンクから到達できます。リンク先は LP のプライバシーページ（`https://shogunaios.com/privacy`）です。以前は `shogunai.app` を指していましたが、そのホストは解決せずリンクが切れていたため、Worker が実際に配信しているドメイン（`apps/website/wrangler.jsonc` の custom domain）へ合わせました。
 
 SHOGUN はローカルファーストの設計です。データの重心はデバイス上の Rust コアにあり、クラウドへ出るのは大規模 LLM の処理に必要なチャンクのみです。以下、その境界を具体的に示します。
 

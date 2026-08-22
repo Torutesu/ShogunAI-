@@ -1,7 +1,7 @@
 # CS / バグ報告窓口 運用ランブック
 
 対象: プロジェクトボード「CS/バグ報告窓口作る　対応方法や最適化も」/ Issue #108（バグ報告→修正の仕組み）。
-実装は 3 面: デスクトップの Help & Support パネル（intake）、syogun.com の intake API（保管）、
+実装は 3 面: デスクトップの Help & Support パネル（intake）、shogunaios.com の intake API（保管）、
 admin API（トリアージ）。本書は「届いた報告をどう処理するか」の運用手順。
 
 ## 1. 窓口の構成
@@ -12,10 +12,10 @@ admin API（トリアージ）。本書は「届いた報告をどう処理す�
       - カテゴリ・本文・任意の返信先メール
       - 診断タプル（app_version / os_version / plan）は明示チェックボックスの opt-in のみ
       - egress ledger に Route::Support で記録（不変条件3。本文は digest のみ）
-  → POST https://syogun.com/api/support/report (apps/website)
+  → POST https://shogunaios.com/api/support/report (apps/website)
       - レート制限 5件/時/IP、ボディ 8KB 上限、カテゴリ・長さ・メール検証
       - support_tickets 行を作成（status = open）
-  → GET/PATCH https://syogun.com/api/admin/support（x-admin-token）
+  → GET/PATCH https://shogunaios.com/api/admin/support（x-admin-token）
 ```
 
 送られる内容はユーザーが書いた本文と opt-in 診断のみ。キャプチャ内容・メモリ内容・
@@ -24,10 +24,15 @@ admin API（トリアージ）。本書は「届いた報告をどう処理す�
 
 ## 2. トリアージ手順（対応方法）
 
+> **通知は実装していない（意図的、2026-08-22 オーナー判断）。** チケットは Postgres に
+> 溜まるだけで、メールも Slack も飛ばない。気づく手段は下の admin API を叩くことだけ
+> なので、**この日次確認を飛ばすと報告は無いのと同じ**になる。通知が必要になったら
+> Slack Incoming Webhook（依存追加なし、Workers で fetch 一発）が最短。
+
 毎営業日 1 回、open チケットを見る:
 
 ```bash
-curl -s https://syogun.com/api/admin/support?status=open \
+curl -s https://shogunaios.com/api/admin/support?status=open \
   -H "x-admin-token: $ADMIN_TOKEN" | jq .
 ```
 
@@ -44,7 +49,7 @@ curl -s https://syogun.com/api/admin/support?status=open \
 処理したら status を進める:
 
 ```bash
-curl -s -X PATCH https://syogun.com/api/admin/support \
+curl -s -X PATCH https://shogunaios.com/api/admin/support \
   -H "x-admin-token: $ADMIN_TOKEN" -H "content-type: application/json" \
   -d '{"id":"<ticket uuid>","status":"triaged"}'
 ```

@@ -126,8 +126,8 @@ mod tests {
 
     #[test]
     fn report_url_normalises_trailing_slash() {
-        assert_eq!(report_url("https://syogun.com/"), "https://syogun.com/api/support/report");
-        assert_eq!(report_url("https://syogun.com"), "https://syogun.com/api/support/report");
+        assert_eq!(report_url("https://shogunaios.com/"), "https://shogunaios.com/api/support/report");
+        assert_eq!(report_url("https://shogunaios.com"), "https://shogunaios.com/api/support/report");
     }
 
     #[test]
