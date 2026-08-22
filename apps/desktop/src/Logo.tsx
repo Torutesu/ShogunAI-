@@ -134,7 +134,21 @@ function prefersStillness(): boolean {
 }
 
 /**
- * Refolds the mark into `shape` while the pointer is over it, and back when it leaves.
+ * Marks the element whose hover drives a refold. Put it on the thing a person would actually aim
+ * at — the brand row, the badge, the card — and the mark inside it answers for the whole thing.
+ * A 20px mark beside its wordmark is a hard target, and the pair reads as one brand anyway.
+ *
+ * A mark with no such ancestor answers for itself, which is the right default for a large one
+ * standing alone.
+ */
+export const MARK_HOVER_HOST = "[data-mark-hover]";
+
+/**
+ * Refolds the mark into `shape` while the pointer is over its host, and back when it leaves.
+ *
+ * Exported because not every mark in the app is an {@link AnimatedLogo}: the daily card draws
+ * {@link MarkFacets} into its own box at the artwork's native aspect, and refolds the same way.
+ * Pass a ref to the `<svg>` that contains the facets.
  *
  * Imperative on purpose. React owns `d` at mount and then never writes it again — the attribute
  * only gets patched when the prop changes, and it never does — so the tween can hold the DOM for
@@ -143,10 +157,10 @@ function prefersStillness(): boolean {
  * Reversal picks up wherever the tween had got to and shortens itself to match, so flicking the
  * pointer across the mark reads as the paper springing back rather than snapping.
  */
-function useRefold(
+export function useMarkRefold(
   svgRef: React.RefObject<SVGSVGElement>,
   shape: MarkShape | undefined,
-  hoverWithin: string | undefined,
+  hoverWithin: string = MARK_HOVER_HOST,
 ): void {
   const frame = useRef(0);
   const at = useRef(0);
@@ -189,7 +203,7 @@ function useRefold(
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg || !shape) return;
-    const host: Element = hoverWithin ? (svg.closest(hoverWithin) ?? svg) : svg;
+    const host: Element = svg.closest(hoverWithin) ?? svg;
     const enter = (): void => run(1);
     const leave = (): void => run(0);
     host.addEventListener("pointerenter", enter);
@@ -212,8 +226,8 @@ function useRefold(
  * exists. It replaces `interactive` rather than stacking with it: both answer the pointer, and two
  * answers to one gesture is one too many.
  *
- * `hoverWithin` hands the trigger to an ancestor. A 24px mark beside its wordmark is a hard thing
- * to hover on purpose, and the pair reads as one brand, so the pair should answer as one.
+ * The hover host is the nearest ancestor carrying {@link MARK_HOVER_HOST}, or the mark itself if
+ * there is none; `hoverWithin` overrides the selector.
  *
  * Restarting the fold is the caller's job, and React already has the verb for it: change the
  * element's `key` and the animation runs again from a fresh node.
@@ -230,12 +244,12 @@ export function AnimatedLogo({
   motion?: MarkMotion;
   interactive?: boolean;
   morphTo?: MarkShape;
-  /** Selector for the ancestor whose hover drives the refold. Defaults to the mark itself. */
+  /** Overrides which ancestor's hover drives the refold. See {@link MARK_HOVER_HOST}. */
   hoverWithin?: string;
   className?: string;
 }): JSX.Element {
   const svgRef = useRef<SVGSVGElement>(null);
-  useRefold(svgRef, morphTo, hoverWithin);
+  useMarkRefold(svgRef, morphTo, hoverWithin);
 
   const classes = [
     "shogun-mark",

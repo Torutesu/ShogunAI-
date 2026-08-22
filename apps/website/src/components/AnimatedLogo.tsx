@@ -4,7 +4,17 @@ import { useCallback, useEffect, useRef } from 'react';
 import { MARK_PARTS, MARK_SHAPES, MarkFacets, markPath, type MarkShape } from '@/components/Logo';
 
 /**
- * The mark, refolded into another shape while the pointer is on it.
+ * Marks the element whose hover drives a refold. Put it on the thing a person would actually aim
+ * at — the brand link, the badge, the visual — and the mark inside it answers for the whole thing.
+ * A 19px mark beside its wordmark is a hard target, and the pair reads as one unit anyway.
+ *
+ * A mark with no such ancestor answers for itself, which is the right default for a large one
+ * standing alone.
+ */
+export const MARK_HOVER_HOST = '[data-mark-hover]';
+
+/**
+ * The mark, refolded into another shape while the pointer is on its host.
  *
  * The heart is not a second drawing cross-faded to: it is the same three facets and the same ten
  * vertices walked to new positions, so the facets stay welded to each other the whole way across
@@ -21,16 +31,13 @@ import { MARK_PARTS, MARK_SHAPES, MarkFacets, markPath, type MarkShape } from '@
 export function AnimatedLogo({
   size = 26,
   shape = 'heart',
-  hoverWithin,
+  hoverWithin = MARK_HOVER_HOST,
   className,
 }: {
   size?: number;
   /** What the mark folds into under the pointer. */
   shape?: MarkShape;
-  /**
-   * Selector for the ancestor whose hover drives the refold. The nav's mark sits inside the brand
-   * link and should answer to the whole link, not to its own 26 pixels. Defaults to the mark.
-   */
+  /** Overrides which ancestor's hover drives the refold. See {@link MARK_HOVER_HOST}. */
   hoverWithin?: string;
   className?: string;
 }) {
@@ -80,7 +87,7 @@ export function AnimatedLogo({
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
-    const host: Element = hoverWithin ? (svg.closest(hoverWithin) ?? svg) : svg;
+    const host: Element = svg.closest(hoverWithin) ?? svg;
     const enter = () => run(1);
     const leave = () => run(0);
     host.addEventListener('pointerenter', enter);

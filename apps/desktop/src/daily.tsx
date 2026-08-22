@@ -5,9 +5,9 @@
 // The webview draws what arrives (invariant 1): section content, times, hedges and chip labels
 // are all composed on the Rust side (`daily_summaries.rs`); this file owns markup only.
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { MarkFacets } from "./Logo";
+import { MarkFacets, useMarkRefold } from "./Logo";
 import { t } from "./strings";
 
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -66,10 +66,13 @@ export interface WrapView {
 
 // ── small pieces ──────────────────────────────────────────────────────────────
 
-/** The confirmed mark in its native 957x614 space, tinted for dark glass. */
+/** The confirmed mark in its native 957x614 space, tinted for dark glass. Refolds into the heart
+ *  with the greeting row it sits in — the mark is 20px wide, far too small to aim at on its own. */
 export function SummaryMark({ className }: { className?: string }): JSX.Element {
+  const ref = useRef<SVGSVGElement>(null);
+  useMarkRefold(ref, "heart");
   return (
-    <svg viewBox="0 0 957 614" className={className ?? "scard__mark"} aria-hidden="true">
+    <svg ref={ref} viewBox="0 0 957 614" className={className ?? "scard__mark"} aria-hidden="true">
       <MarkFacets fill="currentColor" />
     </svg>
   );
@@ -135,7 +138,7 @@ function Section({
 
 function Greet({ which, date }: { which: SummaryWhich; date: string }): JSX.Element {
   return (
-    <div className="scard__greet">
+    <div className="scard__greet" data-mark-hover>
       <SummaryMark />
       <h2>{which === "morning" ? t.goodMorning : t.goodEvening}</h2>
       <span className="scard__date">{dateLabel(date)}</span>

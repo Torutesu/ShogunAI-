@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { Reveal } from '@/components/animations/Reveal';
 import { BrandIcon } from '@/components/BrandIcon';
-import { Logo } from '@/components/Logo';
+import { AnimatedLogo } from '@/components/AnimatedLogo';
 import { Button } from '@/components/ui/button';
 import type { Dictionary } from '@/i18n/dictionaries';
 import type { Locale } from '@/i18n/config';
@@ -31,8 +31,8 @@ export function Action({ t, locale }: { t: Dictionary; locale: Locale }) {
           <div data-testid="execution-console" className="overflow-hidden rounded-[28px] border border-border bg-surface shadow-[var(--shadow-card)]">
             <div className="flex items-center justify-between border-b border-border px-4 py-3.5 sm:px-5">
               <div className="flex min-w-0 items-center gap-2.5">
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-sky-soft">
-                  <Logo size={19} />
+                <span data-mark-hover className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-sky-soft">
+                  <AnimatedLogo size={19} />
                 </span>
                 <div className="min-w-0">
                   <p className="truncate text-[13px] font-semibold text-ink">ShogunAI</p>

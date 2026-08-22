@@ -1,7 +1,7 @@
 import { ArrowRight, Lock, Unplug } from 'lucide-react';
 import { Reveal } from '@/components/animations/Reveal';
 import { BrandIcon } from '@/components/BrandIcon';
-import { Logo } from '@/components/Logo';
+import { AnimatedLogo } from '@/components/AnimatedLogo';
 import type { Dictionary } from '@/i18n/dictionaries';
 import type { Locale } from '@/i18n/config';
 
@@ -112,10 +112,10 @@ function GapIllustration({ index, labels }: { index: number; labels: { notes: st
   }
 
   return (
-    <div className="relative h-[230px] overflow-hidden rounded-[24px] bg-[radial-gradient(circle_at_50%_12%,rgba(255,255,255,0.98),rgba(243,238,255,0.9)_32%,rgba(233,227,255,0.92)_68%,rgba(228,219,255,0.96)_100%)]">
+    <div data-mark-hover className="relative h-[230px] overflow-hidden rounded-[24px] bg-[radial-gradient(circle_at_50%_12%,rgba(255,255,255,0.98),rgba(243,238,255,0.9)_32%,rgba(233,227,255,0.92)_68%,rgba(228,219,255,0.96)_100%)]">
       <div className="absolute left-1/2 top-[52%] h-[124px] w-[124px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle_at_34%_30%,rgba(255,255,255,0.95),rgba(198,179,255,0.92)_35%,rgba(166,141,255,0.98)_75%,rgba(140,115,246,1)_100%)] shadow-[0_20px_44px_rgba(132,108,233,0.24)]" />
       <div className="absolute left-1/2 top-[52%] -translate-x-1/2 -translate-y-1/2">
-        <Logo size={34} className="drop-shadow-[0_6px_18px_rgba(88,72,180,0.25)]" />
+        <AnimatedLogo size={34} className="drop-shadow-[0_6px_18px_rgba(88,72,180,0.25)]" />
       </div>
       <div className="absolute left-1/2 top-[52%] h-[154px] w-[154px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#a98cff]/32" />
       <div className="absolute left-1/2 top-[52%] h-[198px] w-[86%] -translate-x-1/2 -translate-y-1/2 rounded-[999px] border border-[#ab92ff]/25" />
