@@ -33,18 +33,23 @@ This is the same discipline as the product loop: **estimate state, then act unde
 
 ## Same-repo vs fork
 
-- **Same repository** + mechanical class + non-empty diff → draft PR, title starts with `DO NOT MERGE:`.
-- **Fork PR** or no write to the head repo → comment only (classification + suggested command). Never push to a fork.
+- **Same repository** + mechanical class + non-empty diff → draft PR, title starts with `DO NOT MERGE:`. Base is the failing head branch so the draft is only the mechanical commit (not the original PR’s whole diff against `main`).
+- **Fork PR** or no write to the head repo → comment only (classification + suggested command), including when the class is mechanically fixable. Never push to a fork.
 - **Push to `main`** + mechanical class → draft PR targeting `main`.
 - **Push to `main`** + non-mechanical → no issue spam; the failed run stays the record.
+- Manual `workflow_dispatch` must name a failed `ci` run (decimal run id). Other workflows and successful runs are refused.
 
 ## Idempotency
 
-Fingerprint = `class` + head SHA. If an open draft already carries label `ci-autofix` and that fingerprint in the body, do not open another.
+Fingerprint = `class` + head SHA. If an open draft already carries label `ci-autofix` and that fingerprint in the body, do not open another. A leftover `autofix/…` branch without a PR is not treated as done — create the draft.
+
+Classification uses **failed-job** logs and failure diagnostics (`clippy::`, `Would reformat:`, a guard script plus `violation`/`FAILED`). Successful `cargo clippy` / `check-*.py` command lines in the aggregate log must not pick the class. `shogun-desktop-spike` clippy is `macos` (comment-only): the workspace apply excludes that crate. `ci` does not run `cargo fmt --check` today; the rustfmt class stays reserved for an actual rustfmt diagnostic so a format gate is not bolted onto an unformatted tree.
 
 ## Privacy
 
-`scripts/ci_autofix.py redact` strips bearer tokens, `ghp_`/`gho_` prefixes, `sk-` keys, PEM blocks, and `shogun-` license-shaped strings before any GitHub write. Classifier runs on the redacted log.
+`scripts/ci_autofix.py redact` runs on the complete raw log before any truncate or GitHub write. It strips the same issuer prefixes as `shogun-redact` (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, Slack `xox*`, AWS `AKIA`/`ASIA`, Google `AIza`/`ya29.`, …), bearer tokens including `+/=`, PEM blocks, and licence keys of the shape `shogun-XXXX-XXXX-XXXX-XXXX` (Crockford). Crate names such as `shogun-desktop-spike` are not licence keys. Classifier runs on the redacted log.
+
+Untrusted `cargo clippy --fix` / `cargo fmt` runs without `GH_TOKEN` and without persisted checkout credentials. The token is used only for log fetch, `git fetch`/`push`, and `gh`.
 
 ## Done when
 

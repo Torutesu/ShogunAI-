@@ -17,19 +17,37 @@ import json
 import re
 import sys
 
-# Strip these before any GitHub write. Keep the detector greedy and cheap.
+# Align with crates/shogun-redact issuer prefixes, plus PEM and the licence-key shape.
+# Word-boundary prefixes so crate names / prose are not treated as credentials.
 SECRET_RES = [
-    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
-    re.compile(r"gho_[A-Za-z0-9]{20,}"),
-    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
-    re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{12,}"),
-    re.compile(r"sk-(?:ant-)?[A-Za-z0-9\-_]{16,}"),
+    re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"(?i)(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9._\-+/=]{12,}"),
+    re.compile(r"(?<![A-Za-z0-9])sk-(?:ant-)?[A-Za-z0-9\-_]{16,}"),
+    re.compile(r"(?<![A-Za-z0-9])xox[bpas]-[A-Za-z0-9\-]{12,}"),
+    re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{12,}"),
+    re.compile(r"(?<![A-Za-z0-9])AIza[A-Za-z0-9\-_]{20,}"),
+    re.compile(r"(?<![A-Za-z0-9])ya29\.[A-Za-z0-9._\-+/=]{12,}"),
+    re.compile(r"(?<![A-Za-z0-9])glpat-[A-Za-z0-9\-_]{16,}"),
+    re.compile(r"(?<![A-Za-z0-9])sq0(?:atp|csp)-[A-Za-z0-9\-_]{12,}"),
+    re.compile(r"(?<![A-Za-z0-9])shpat_[A-Za-z0-9]{20,}"),
+    re.compile(r"(?<![A-Za-z0-9])SG\.[A-Za-z0-9\-_.]{16,}"),
+    re.compile(r"(?<![A-Za-z0-9])GOCSPX-[A-Za-z0-9\-_]{16,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"shogun-[A-Za-z0-9]{4,}-[A-Za-z0-9\-]+"),
+    # Licence key: shogun-XXXX-XXXX-XXXX-XXXX (Crockford; I/L/O/U excluded).
+    # Must not match crate paths such as shogun-desktop-spike.
+    re.compile(
+        r"(?i)(?<![A-Za-z0-9])shogun-(?:[0-9A-HJ-NP-TV-Z]{4}-){3}[0-9A-HJ-NP-TV-Z]{4}"
+        r"(?![A-Za-z0-9-])"
+    ),
 ]
 
-CLIPPY_HINT = re.compile(r"\bclippy::|\berror: .+ clippy|cargo clippy", re.I)
-FMT_HINT = re.compile(r"rustfmt|would reformat|cargo fmt", re.I)
+# Diagnostics, not the successful `cargo clippy` / `cargo fmt` command line.
+CLIPPY_DIAG = re.compile(r"clippy::|^error: .+clippy", re.I | re.M)
+FMT_DIAG = re.compile(
+    r"Would reformat:|error: .+not formatted according to rustfmt|rustfmt --check",
+    re.I,
+)
 TEST_FAIL = re.compile(r"\btest result: FAILED\b|\bFAILED\b.+\.rs|\btest .+\s\.\.\. FAILED\b")
 INVARIANT = [
     ("check-http-egress.py", "invariant_guard"),
@@ -39,6 +57,10 @@ INVARIANT = [
     ("check-migrations.py", "invariant_guard"),
     ("check-batch-source-filter.py", "invariant_guard"),
 ]
+SCRIPT_FAIL = re.compile(
+    r"violation|exit code [1-9]|Traceback|AssertionError|Process completed with exit code",
+    re.I,
+)
 HARNESS_HINT = re.compile(
     r"spike-harness|slo-0[12]|notch.*(?:expand|p95)|context cache|idle cpu",
     re.I,
@@ -58,17 +80,38 @@ def redact(text: str) -> str:
     return out
 
 
+def _failed_script(log: str, script: str) -> bool:
+    """True only when the script name sits next to a failure signal.
+
+    `gh run view --log` includes successful jobs. Matching the script name
+    alone would classify every later frontend/API failure as invariant_guard.
+    """
+    lines = log.splitlines()
+    for i, line in enumerate(lines):
+        if script not in line:
+            continue
+        window = "\n".join(lines[i : i + 4])
+        if SCRIPT_FAIL.search(window):
+            return True
+    return False
+
+
 def classify(log: str) -> str:
     if "SECRET_REDACTED" in log or log.startswith("[possible secret"):
         return "leak"
     for needle, klass in INVARIANT:
-        if needle in log:
+        if _failed_script(log, needle):
             return klass
-    if FMT_HINT.search(log) and not CLIPPY_HINT.search(log):
+    # macOS-shell clippy cannot be fixed by the workspace apply (spike excluded).
+    if MACOS_HINT.search(log) and CLIPPY_DIAG.search(log):
+        return "macos"
+    if FMT_DIAG.search(log) and not CLIPPY_DIAG.search(log):
         return "rustfmt"
-    if CLIPPY_HINT.search(log):
+    if CLIPPY_DIAG.search(log):
         return "clippy"
-    if HARNESS_HINT.search(log):
+    if HARNESS_HINT.search(log) and (
+        TEST_FAIL.search(log) or "error" in log.lower() or "FAILED" in log
+    ):
         return "harness"
     if MACOS_HINT.search(log) and "error" in log.lower():
         return "macos"
@@ -80,8 +123,6 @@ def classify(log: str) -> str:
         return "frontend"
     if TEST_FAIL.search(log) or "error: test failed" in log.lower():
         return "rust_test"
-    if FMT_HINT.search(log):
-        return "rustfmt"
     return "unknown"
 
 
@@ -146,13 +187,53 @@ def self_test() -> None:
     assert classify(redact(leak_log)) == "leak"
     assert apply_commands("leak") == []
 
+    for sample in (
+        "ghs_" + ("b" * 36),
+        "ghu_" + ("c" * 36),
+        "ghr_" + ("d" * 36),
+        "xoxb-123456789012-abcdefghijkl",
+        "AKIAIOSFODNN7EXAMPLE",
+        "AIza" + ("E" * 32),
+        "ya29." + ("f" * 20),
+        "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+        "Authorization: Bearer abcdefghijkl+/==",
+        "shogun-A2B3-C4D5-E6F7-G8H9",
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----",
+    ):
+        assert "[SECRET_REDACTED]" in redact(sample), sample
+    for prose in (
+        "task-management-workflow",
+        "ASIA-PACIFIC-2026-PLANNING",
+    ):
+        assert "SECRET_REDACTED" not in redact(prose), prose
+
+    crate = "cargo clippy -p shogun-desktop-spike --all-targets\n"
+    assert "SECRET_REDACTED" not in redact(crate)
+    assert "shogun-desktop-spike" in redact(crate)
+    assert classify(redact(crate + "error: clippy::unwrap_used\n")) == "macos"
+
     fmt_log = "Diff in src/lib.rs exists\nWould reformat: crates/shogun-fusion/src/lib.rs\n"
     assert classify(redact(fmt_log)) == "rustfmt"
     assert apply_commands("rustfmt") == ["cargo fmt --all"]
+    # Command-name only: not a rustfmt failure.
+    assert classify(redact("cargo fmt --all\nerror: test failed\n")) == "rust_test"
 
     clippy_log = "error: this lint: clippy::unwrap_used\n --> crates/shogun-core/src/daemon.rs\n"
     assert classify(redact(clippy_log)) == "clippy"
     assert apply_commands("clippy")
+
+    # Successful rust job prints these command names on every run. A later test
+    # failure must not become clippy / invariant_guard / leak.
+    mixed = (
+        "cargo clippy --workspace --exclude shogun-desktop-spike --all-targets\n"
+        "python3 scripts/check-log-hygiene.py\n"
+        "python3 scripts/check-migrations.py\n"
+        "python3 scripts/ci_autofix.py --self-test\n"
+        "test db_backend::tests::foo ... FAILED\n"
+        "test result: FAILED. 1 failed\n"
+    )
+    assert "SECRET_REDACTED" not in redact(mixed)
+    assert classify(redact(mixed)) == "rust_test"
 
     inv_log = "python3 scripts/check-log-hygiene.py\nlog-rule violation: a bare log line\n"
     assert classify(redact(inv_log)) == "invariant_guard"
