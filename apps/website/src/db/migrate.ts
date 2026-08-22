@@ -17,6 +17,22 @@ const url =
 const sql = postgres(url, { max: 1 });
 
 /**
+ * The password exactly as it appears in the connection string, before any decoding.
+ *
+ * Hand-parsed because `new URL` normalises: it re-encodes reserved characters on the way out, so
+ * its `password` is not the text a human pasted. The authority ends at the first `/`, and the
+ * userinfo at the **last** `@` within it, so a password containing `@` is read whole.
+ */
+function literalPassword(raw: string): string {
+  const authority = raw.slice(raw.indexOf('://') + 3).split('/')[0];
+  const at = authority.lastIndexOf('@');
+  if (at < 0) return '';
+  const userinfo = authority.slice(0, at);
+  const colon = userinfo.indexOf(':');
+  return colon < 0 ? '' : userinfo.slice(colon + 1);
+}
+
+/**
  * What the connection string actually parsed to, with the password removed.
  *
  * A failed migrate blocks the whole deploy, so the log has to answer "which of the five parts is
@@ -43,6 +59,21 @@ function describeUrl(raw: string): string {
   ];
   if (/^\[.*\]$/.test(password)) {
     lines.push('  ^^ that is still the dashboard placeholder — substitute the real password');
+  }
+  // Catches a failure with no other symptom: a literal `%` followed by two hex digits is a valid
+  // escape, so a password containing one is decoded into a *different* string and sent silently.
+  // Verified against postgres:16 — `aB3%2Fx9`, `aB3%41x9` and `pa%73s` each authenticate as
+  // something else and come back 28P01, indistinguishable from a wrong password.
+  //
+  // Read off the raw string rather than `u.password`: the URL parser hands back a re-encoded form
+  // (a literal `@` in a password comes back as `%40`), so comparing that against its own decoding
+  // flags every password containing a reserved character. Reporting only whether an escape was
+  // present leaks nothing about the value.
+  if (/%[0-9A-Fa-f]{2}/.test(literalPassword(raw))) {
+    lines.push(
+      '  ^^ this password was percent-DECODED before being sent: the text contains a `%` escape.',
+      '     If the password really contains a literal `%`, write it as `%25` in the URL.',
+    );
   }
   return lines.join('\n');
 }
