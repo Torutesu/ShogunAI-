@@ -30,6 +30,12 @@
 //!   exactly one service, so publishing both would let an approved Linear comment execute against
 //!   GitHub. The colliding half stays unpublished until the variant can name its service — a
 //!   round-trip test in shogun-integrations holds this line.
+//! - Slack's reaction and Linear's status change take a *value* (an emoji name, a state name), not
+//!   content — but the shared proposal schema has only `body`, described to the model as the full
+//!   content, and `args_for_send` would hand that prose to the service as the value. The model
+//!   would have no field for the thing it is actually setting, and the approval preview would show
+//!   the user the wrong thing. Both are Wave 2/3, so they stay unpublished until the proposal
+//!   schema can name those fields.
 
 use serde_json::{json, Value};
 
@@ -183,14 +189,6 @@ const CATALOG: &[ToolEntry] = &[
         kind: ToolKind::Propose,
     },
     ToolEntry {
-        name: "propose_chat_reaction",
-        service: Service::Slack,
-        scope_op: "reaction",
-        description: "Propose reacting to a message. Everyone in the channel can see a reaction, \
-                      so the user approves it first.",
-        kind: ToolKind::Propose,
-    },
-    ToolEntry {
         name: "propose_issue_comment",
         service: Service::GitHub,
         scope_op: "issue_create_or_comment",
@@ -202,14 +200,6 @@ const CATALOG: &[ToolEntry] = &[
         service: Service::Notion,
         scope_op: "page_update",
         description: "Propose changing a page in the user's notes. The user approves it first.",
-        kind: ToolKind::Propose,
-    },
-    ToolEntry {
-        name: "propose_issue_status_change",
-        service: Service::Linear,
-        scope_op: "status_change",
-        description: "Propose moving an issue to another state. The whole team sees the change, \
-                      so the user approves it first.",
         kind: ToolKind::Propose,
     },
 ];
@@ -316,10 +306,8 @@ fn input_schema(name: &str) -> Value {
         }
         "propose_drive_document" => addressed_schema("title", "The document's name."),
         "propose_chat_message" => addressed_schema("channel", "The channel to post to."),
-        "propose_chat_reaction" => addressed_schema("target", "The message to react to."),
         "propose_issue_comment" => addressed_schema("target", "The issue or pull request."),
         "propose_doc_change" => addressed_schema("title", "The page to change."),
-        "propose_issue_status_change" => addressed_schema("target", "The issue to move."),
         // Unreachable for a catalog entry: `every_entry_has_a_schema` pins the two together.
         _ => json!({ "type": "object", "properties": {} }),
     }
@@ -361,10 +349,8 @@ pub fn proposed_action(entry: &ToolEntry, input: &Value) -> Option<Action> {
         }
         "propose_drive_document" => SendAction::CreateDocument { title: field("title")? },
         "propose_chat_message" => SendAction::PostMessage { channel: field("channel")? },
-        "propose_chat_reaction" => SendAction::AddReaction { target: field("target")? },
         "propose_issue_comment" => SendAction::PostComment { target: field("target")? },
         "propose_doc_change" => SendAction::UpdateDocument { title: field("title")? },
-        "propose_issue_status_change" => SendAction::ChangeIssueStatus { target: field("target")? },
         _ => return None,
     };
     Some(Action::Send(send))
@@ -390,23 +376,38 @@ fn role(service: Service) -> &'static str {
     }
 }
 
-/// The one-line role description for the prompt block.
+/// The one-line role description for the prompt block. Static per service, not per state: a
+/// service whose proposals happen to be gated off right now (draft-stop, plan, wave) still says
+/// approval is required, because the sentence sets expectations and the gate is the guarantee —
+/// "requires approval" can become unreachable, never false. Only a service with no publishable
+/// proposal at all stays "Read-only." (today: Linear, whose one send is deliberately unpublished
+/// — see the module header).
 fn role_line(service: Service) -> &'static str {
     match service {
         Service::GoogleCalendar => {
-            "the user's calendar. Events, availability, upcoming meetings. Read-only."
+            "the user's calendar. Events, availability, upcoming meetings. Read-only; creating \
+             or changing an event always requires the user's explicit approval."
         }
         Service::Gmail => {
             "the user's mail. Threads and messages. Read-only; you may draft replies, but sending \
              always requires the user's explicit approval."
         }
-        Service::GoogleDrive => "the user's documents and files. Read-only.",
+        Service::GoogleDrive => {
+            "the user's documents and files. Read-only; creating a document always requires the \
+             user's explicit approval."
+        }
         Service::Slack => {
             "the user's chat messages. Read-only; posting always requires the user's explicit \
              approval."
         }
-        Service::Notion => "the user's notes and documents. Read-only.",
-        Service::GitHub => "the user's code issues and pull requests. Read-only.",
+        Service::Notion => {
+            "the user's notes and documents. Read-only; changing a page always requires the \
+             user's explicit approval."
+        }
+        Service::GitHub => {
+            "the user's code issues and pull requests. Read-only; commenting always requires the \
+             user's explicit approval."
+        }
         Service::Linear => "the user's issue tracker. Read-only.",
     }
 }
@@ -498,8 +499,9 @@ fn offerable_services(services: &[ServiceState], ctx: &ToolContext) -> Vec<Servi
 /// The "Connected services" system-prompt block (§5-1), or `None` when nothing is connected —
 /// in which case the prompt says nothing at all rather than announcing an empty list.
 ///
-/// The block names roles, never tool names or transports, and always carries the sentence about
-/// approval. The sentence is expectation-setting only: the guarantee is the gate.
+/// The block names roles, never tool names or transports; every service with a publishable
+/// proposal carries the sentence about approval. The sentence is expectation-setting only: the
+/// guarantee is the gate.
 pub fn connected_services_block(services: &[ServiceState], ctx: &ToolContext) -> Option<String> {
     let available = offerable_services(services, ctx);
     if available.is_empty() {
@@ -814,9 +816,9 @@ mod tests {
             block,
             "## Connected services\n\
              You can pull context from these connected services:\n\
-             - calendar: the user's calendar. Events, availability, upcoming meetings. Read-only.\n\
+             - calendar: the user's calendar. Events, availability, upcoming meetings. Read-only; creating or changing an event always requires the user's explicit approval.\n\
              - mail: the user's mail. Threads and messages. Read-only; you may draft replies, but sending always requires the user's explicit approval.\n\
-             - drive: the user's documents and files. Read-only.\n\
+             - drive: the user's documents and files. Read-only; creating a document always requires the user's explicit approval.\n\
              \n\
              Priorities:\n\
              - Questions about schedule, meetings, or availability → check calendar first.\n\
@@ -854,8 +856,20 @@ mod tests {
     }
 
     #[test]
-    fn the_block_always_carries_the_approval_sentence_when_mail_is_present() {
-        let block = connected_services_block(&[connected(Service::Gmail)], &ctx()).unwrap();
-        assert!(block.contains("sending always requires the user's explicit approval"));
+    fn every_service_with_a_publishable_proposal_carries_the_approval_sentence() {
+        // The role line must never contradict the tools array: a service the model can propose
+        // through says approval is required, and only a service with no publishable send at all
+        // stays "Read-only." — otherwise one request tells the model both things at once.
+        let ctx = ToolContext { highest_released: Wave::Three, draft_stop: true, plan: pro() };
+        for service in scope::ALL_SERVICES {
+            let block = connected_services_block(&[connected(*service)], &ctx).unwrap();
+            let can_propose =
+                CATALOG.iter().any(|e| e.service == *service && e.kind == ToolKind::Propose);
+            assert_eq!(
+                block.contains("requires the user's explicit approval"),
+                can_propose,
+                "{service:?}'s role line contradicts its catalog entries: {block}"
+            );
+        }
     }
 }
