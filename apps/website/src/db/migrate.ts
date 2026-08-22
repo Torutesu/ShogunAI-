@@ -147,9 +147,39 @@ async function main() {
     )
   `;
 
+  // Row Level Security on every table this file creates.
+  //
+  // Nothing here reaches the database through Supabase's PostgREST layer — `db/index.ts` opens a
+  // direct connection with postgres.js as a privileged role, and that role is not subject to RLS.
+  // So this changes nothing for the app. What it closes is the *other* door: Supabase grants the
+  // `anon` and `authenticated` roles access to public tables by default, and the anon key is
+  // meant to be public. `licenses` holds licence keys — bearer credentials — and `participants`
+  // holds email addresses.
+  //
+  // Enabled with **no policies**, which is deny-all for every role RLS applies to. That is the
+  // intended end state, not an unfinished one: there is no legitimate anon read of these tables,
+  // so a policy would be a hole rather than a fix. Supabase's advisor reports this as
+  // "RLS Enabled No Policy" — an informational note that assumes you meant to add policies.
+  //
+  // `ENABLE`, never `FORCE`: FORCE would subject the table owner to RLS too, and the app connects
+  // as a role that is very likely the owner. That would lock out the application itself.
+  for (const table of [
+    'participants',
+    'rate_limits',
+    'points_ledger',
+    'x_follower_snapshot',
+    'x_quote_snapshot',
+    'billing_customers',
+    'subscriptions',
+    'licenses',
+    'stripe_events',
+  ]) {
+    await sql`ALTER TABLE ${sql(table)} ENABLE ROW LEVEL SECURITY`;
+  }
+
   console.log(
     'migrated: participants, rate_limits, points_ledger, x_follower_snapshot, x_quote_snapshot, ' +
-      'billing_customers, subscriptions, licenses, stripe_events',
+      'billing_customers, subscriptions, licenses, stripe_events (RLS enabled on all)',
   );
   await sql.end();
 }
