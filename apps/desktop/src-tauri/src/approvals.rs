@@ -53,6 +53,15 @@ pub mod mac {
         /// `SHOGUN_COMPOSIO_USER_ID` env var when empty. Stored in policy JSON (not a secret).
         #[serde(default)]
         pub user_id: String,
+        /// Whether Gmail is currently connected. Gmail's Composio transport stores no per-service
+        /// token, and its API key, user id and consent all outlive a disconnect — so this flag is
+        /// what makes a disconnect durable. Inferring "connected" from credentials instead would
+        /// let a relaunch resume third-party egress the user had switched off.
+        ///
+        /// `serde(default)` means every `composio.json` already on disk reads as disconnected, so
+        /// upgrading auto-connects nobody.
+        #[serde(default)]
+        pub gmail_connected: bool,
     }
 
     impl Default for ComposioPolicy {
@@ -61,6 +70,7 @@ pub mod mac {
                 draft_stop: true,
                 consent_acknowledged: false,
                 user_id: String::new(),
+                gmail_connected: false,
             }
         }
     }
@@ -784,6 +794,15 @@ pub mod mac {
         std::fs::write(&path, json).map_err(|e| format!("save failed: {e}"))
     }
 
+    /// Persist whether Gmail is connected, preserving every other field.
+    ///
+    /// The durable half of the connection for a service whose transport stores no token: what the
+    /// Keychain token set is for Calendar and Drive.
+    pub(crate) fn set_gmail_connected(app: &tauri::AppHandle, connected: bool) -> Result<(), String> {
+        let policy = load_composio_policy(app);
+        save_composio_policy(app, ComposioPolicy { gmail_connected: connected, ..policy })
+    }
+
     /// Update the persisted Composio policy. Enforces the invariant that draft_stop may only be
     /// turned OFF once consent has been acknowledged (FR-C2-02 / FR-C2-03). Preserves `user_id`.
     #[tauri::command]
@@ -886,6 +905,7 @@ pub mod mac {
                 consent_acknowledged: true,
                 draft_stop: false,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             let standard = entitlements(Plan::Standard, 0);
             let expired = entitlements(
@@ -920,6 +940,7 @@ pub mod mac {
                 consent_acknowledged: true,
                 draft_stop: true,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             assert!(
                 !composio_send_allowed(policy, &pro()),
@@ -934,6 +955,7 @@ pub mod mac {
                 consent_acknowledged: false,
                 draft_stop: false,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             assert!(
                 !composio_send_allowed(policy, &pro()),
@@ -948,6 +970,7 @@ pub mod mac {
                 consent_acknowledged: true,
                 draft_stop: false,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             assert!(
                 composio_send_allowed(policy, &pro()),
@@ -1008,6 +1031,7 @@ pub mod mac {
                 draft_stop: false,
                 consent_acknowledged: true,
                 user_id: "test-user-123".to_string(),
+                ..ComposioPolicy::default()
             };
             let json = serde_json::to_string(&original).expect("serialize");
             let loaded: ComposioPolicy = serde_json::from_str(&json).expect("deserialize");
@@ -1022,6 +1046,7 @@ pub mod mac {
                 draft_stop: false,
                 consent_acknowledged: true,
                 user_id: String::new(),
+                ..ComposioPolicy::default()
             };
             let updated = with_user_id(p, "new-user");
             assert_eq!(updated.user_id, "new-user");
@@ -1035,6 +1060,7 @@ pub mod mac {
                 draft_stop: true,
                 consent_acknowledged: false,
                 user_id: "preserved-user".to_string(),
+                ..ComposioPolicy::default()
             };
             let updated = with_flags(p, false, true);
             assert_eq!(updated.user_id, "preserved-user");

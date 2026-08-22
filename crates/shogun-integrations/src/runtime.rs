@@ -109,6 +109,21 @@ impl<T> ConnectorRuntime<T> {
         self.registry.apply(service, ConnEvent::Connected { ts: now_ms });
     }
 
+    /// Rehydrate a service the app already holds durable credentials for (FR-INT-03).
+    ///
+    /// The registry lives in memory and starts every service `Disconnected`, but a connection does
+    /// not end when the process does — the token sits in the Keychain across relaunches. Without
+    /// this the panel reports "Not connected" for a service that is connected, and — worse, because
+    /// it is silent — [`Self::services_due`] skips it, so the 15-minute read-sync never runs again
+    /// until the user redoes the whole browser OAuth flow.
+    ///
+    /// Restores with no last-sync time on purpose: the state is "connected, never synced this
+    /// process", which makes the service due on the next tick instead of idling out one more
+    /// interval, and shows no freshness rather than a fabricated one.
+    pub fn restore_connected(&mut self, service: Service) {
+        self.registry.apply(service, ConnEvent::Connected { ts: 0 });
+    }
+
     /// Record that a service's token expired / was revoked (amber).
     pub fn mark_token_expired(&mut self, service: Service) {
         self.registry.apply(service, ConnEvent::TokenExpired);
@@ -344,6 +359,30 @@ mod tests {
     fn runtime(items: Vec<FetchedItem>, err: Option<String>) -> ConnectorRuntime<FakeTransport> {
         // Wave 1 released, draft-stop on (irrelevant to reads).
         ConnectorRuntime::new(FakeTransport { items, err }, Wave::One, true)
+    }
+
+    #[test]
+    fn a_restored_connection_shows_connected_and_syncs_on_the_next_tick() {
+        // The relaunch case: the credential outlived the process, so the runtime is told to
+        // restore. Before this existed the registry started Disconnected and stayed there, which
+        // silently excluded the service from `services_due` — the read-sync never ran again.
+        let mut rt = runtime(vec![], None);
+        rt.restore_connected(Service::GoogleCalendar);
+
+        assert!(
+            matches!(rt.registry().state(Service::GoogleCalendar), ConnState::Connected { .. }),
+            "a restored service reads as connected"
+        );
+        assert!(
+            rt.services_due(60_000, 15 * 60_000).contains(&Service::GoogleCalendar),
+            "restored with no last-sync time, so it is due immediately rather than idling out one \
+             more interval"
+        );
+        assert_eq!(
+            rt.registry().state(Service::Gmail),
+            ConnState::Disconnected,
+            "restoring one service does not touch another"
+        );
     }
 
     #[test]
