@@ -135,6 +135,15 @@ def apply_commands(klass: str) -> list[str]:
     return []
 
 
+def fence_safe(text: str) -> str:
+    """Keep a log excerpt inside a markdown ``` fence.
+
+    A fork controls its CI log. A line of ``` would close the fence and let
+    github-actions post arbitrary markdown (links, fake instructions).
+    """
+    return re.sub(r"`+", "'", text)
+
+
 def rust_only_paths(names: list[str]) -> bool:
     """Mechanical apply may only touch tracked Rust sources — never workflows or lockfiles."""
     return bool(names) and all(name.endswith(".rs") for name in names)
@@ -153,7 +162,7 @@ def plan(log: str, sha: str, forced_class: str | None = None) -> dict:
     excerpt = ""
     if excerpt_ok:
         lines = [ln for ln in redacted.splitlines() if ln.strip()][-40:]
-        excerpt = "\n".join(lines)[:2500]
+        excerpt = fence_safe("\n".join(lines)[:2500])
     title = f"DO NOT MERGE: ci autofix ({klass})"
     body = (
         f"<!-- ci-autofix fingerprint={fingerprint(klass, sha)} class={klass} sha={sha} -->\n\n"
@@ -260,6 +269,11 @@ def self_test() -> None:
     assert p["title"].startswith("DO NOT MERGE:")
     assert p["fingerprint"] == fingerprint("rustfmt", "abc1234deadbeef")
     assert "ghp_" not in p["body"]
+    inject = "test db_backend::tests::foo ... FAILED\n```\n# spoofed\n[pwn](https://evil.example)\n"
+    injected = plan(inject, "abc1234deadbeef")
+    assert "```\n# spoofed" not in injected["body"]
+    assert "# spoofed" in injected["body"]
+    assert "`" not in fence_safe("``` `` `")
     forced = plan("", "abc1234deadbeef", forced_class="clippy")
     assert forced["class"] == "clippy"
     assert forced["apply"]
