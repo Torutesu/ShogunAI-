@@ -1292,6 +1292,11 @@ export function MeetingOverlay(): JSX.Element | null {
           <img className="ov__bar-stop-ico" src={stopIcon} alt="" width={36} height={36} draggable={false} />
         </button>
         </div>
+        {view.audio_error ? (
+          <p className="ov__audio-error" role="alert">
+            {view.audio_error}
+          </p>
+        ) : null}
       </div>
     );
 

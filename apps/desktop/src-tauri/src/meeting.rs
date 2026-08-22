@@ -36,6 +36,14 @@ pub mod mac {
         apply, db, emit, finish_audio_stop, now_ms, set_live_emit_session, step, view, Lane, LANE,
     };
 
+    /// MCP/REST/CLI run outside this process and persist only the meeting microphone. Refresh
+    /// that field before a desktop mutation so a later UI save cannot erase an API selection.
+    fn settings_with_persisted_microphone(settings: &Settings) -> Settings {
+        let mut merged = settings.clone();
+        merged.microphone = shogun_core::meeting::settings_store::load().microphone;
+        merged
+    }
+
     #[tauri::command]
     pub fn meeting_status() -> MeetingView {
         let now = now_ms();
@@ -50,6 +58,7 @@ pub mod mac {
                 elapsed_ms: 0,
                 countdown_ms: 0,
                 paused: false,
+                audio_error: None,
             })
     }
 
@@ -170,7 +179,7 @@ pub mod mac {
                 // Resume: open devices off the command thread so invoke returns after emit.
                 let app2 = app.clone();
                 std::thread::spawn(move || {
-                    let mut handle = crate::audio_lane::start(&app2, id, live);
+                    let handle = crate::audio_lane::start(&app2, id, live);
                     if let Ok(mut g) = LANE.lock() {
                         if let Some(lane) = g.as_mut() {
                             // Only adopt the lane this worker actually started for. A fast
@@ -184,12 +193,24 @@ pub mod mac {
                                 && lane.session_id == Some(id)
                                 && lane.audio.is_none()
                             {
-                                lane.audio = handle.take();
-                                return;
+                                match handle {
+                                    Ok(handle) => {
+                                        lane.audio = Some(handle);
+                                        return;
+                                    }
+                                    Err(error) => {
+                                        set_live_emit_session(0);
+                                        lane.audio_error = Some(error);
+                                        emit(&app2, lane, now_ms());
+                                        return;
+                                    }
+                                }
                             }
                         }
                     }
-                    finish_audio_stop(handle);
+                    if let Ok(handle) = handle {
+                        finish_audio_stop(Some(handle));
+                    }
                 });
             }
             Some(After::Stop(handle)) => {
@@ -424,7 +445,12 @@ pub mod mac {
     pub fn get_meeting_settings() -> Settings {
         LANE.lock()
             .ok()
-            .and_then(|g| g.as_ref().map(|l| l.settings.clone()))
+            .and_then(|mut g| {
+                g.as_mut().map(|lane| {
+                    lane.settings = settings_with_persisted_microphone(&lane.settings);
+                    lane.settings.clone()
+                })
+            })
             .unwrap_or_default()
     }
 
@@ -448,10 +474,9 @@ pub mod mac {
             let Some(lane) = g.as_ref() else {
                 return Err("not ready".into());
             };
-            Settings {
-                enabled,
-                ..lane.settings.clone()
-            }
+            let mut candidate = settings_with_persisted_microphone(&lane.settings);
+            candidate.enabled = enabled;
+            candidate
         };
         save(&app, &candidate)?;
 
@@ -491,10 +516,9 @@ pub mod mac {
             let Some(lane) = g.as_ref() else {
                 return Err("not ready".into());
             };
-            Settings {
-                allow_mic_only_detect: allow,
-                ..lane.settings.clone()
-            }
+            let mut candidate = settings_with_persisted_microphone(&lane.settings);
+            candidate.allow_mic_only_detect = allow;
+            candidate
         };
         save(&app, &candidate)?;
 
@@ -512,6 +536,59 @@ pub mod mac {
             "[meeting] mic-only detect → {}",
             if allow { "on" } else { "off" }
         );
+        Ok(())
+    }
+
+    /// Select the microphone used for the next meeting. `None` follows the macOS default.
+    /// Capture refuses a missing selection instead of silently using another input.
+    #[derive(serde::Serialize)]
+    pub struct MeetingMicrophone {
+        name: String,
+        ambiguous: bool,
+    }
+
+    #[tauri::command(async)]
+    pub fn get_meeting_microphones() -> Result<Vec<MeetingMicrophone>, String> {
+        shogun_core::audio::capture::mic::input_device_choices().map(|choices| {
+            choices
+                .into_iter()
+                .map(|choice| MeetingMicrophone {
+                    name: choice.name,
+                    ambiguous: choice.ambiguous,
+                })
+                .collect()
+        })
+    }
+
+    #[tauri::command]
+    pub fn set_meeting_microphone(
+        microphone: Option<String>,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
+        let candidate = {
+            let Ok(g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_ref() else {
+                return Err("not ready".into());
+            };
+            Settings {
+                microphone: microphone.filter(|name| !name.trim().is_empty()),
+                ..lane.settings.clone()
+            }
+        };
+        save(&app, &candidate)?;
+
+        let Ok(mut g) = LANE.lock() else {
+            return Err("busy".into());
+        };
+        let Some(lane) = g.as_mut() else {
+            return Err("not ready".into());
+        };
+        lane.settings = candidate.clone();
+        if let Ok(mut live) = lane.live_settings.write() {
+            *live = candidate;
+        }
         Ok(())
     }
 
@@ -547,7 +624,7 @@ pub mod mac {
     ) {
         std::thread::spawn(move || {
             finish_audio_stop(old);
-            let mut handle = crate::audio_lane::start(&app, id, live);
+            let handle = crate::audio_lane::start(&app, id, live);
             if let Ok(mut g) = LANE.lock() {
                 if let Some(lane) = g.as_mut() {
                     if lane.machine.state() == State::Recording
@@ -555,13 +632,25 @@ pub mod mac {
                         && lane.session_id == Some(id)
                         && lane.audio.is_none()
                     {
-                        lane.audio = handle.take();
-                        eprintln!("[meeting] ASR lane restarted (language/mode change)");
-                        return;
+                        match handle {
+                            Ok(handle) => {
+                                lane.audio = Some(handle);
+                                eprintln!("[meeting] ASR lane restarted (language/mode change)");
+                                return;
+                            }
+                            Err(error) => {
+                                set_live_emit_session(0);
+                                lane.audio_error = Some(error);
+                                emit(&app, lane, now_ms());
+                                return;
+                            }
+                        }
                     }
                 }
             }
-            finish_audio_stop(handle);
+            if let Ok(handle) = handle {
+                finish_audio_stop(Some(handle));
+            }
         });
     }
 
@@ -577,13 +666,9 @@ pub mod mac {
             let Some(lane) = g.as_ref() else {
                 return Err("not ready".into());
             };
-            (
-                Settings {
-                    meeting_mode: mode,
-                    ..lane.settings.clone()
-                },
-                lane.settings.asr_language(),
-            )
+            let mut candidate = settings_with_persisted_microphone(&lane.settings);
+            candidate.meeting_mode = mode;
+            (candidate, lane.settings.asr_language())
         };
         save(&app, &candidate)?;
 
@@ -633,16 +718,12 @@ pub mod mac {
             let Some(lane) = g.as_ref() else {
                 return Err("not ready".into());
             };
-            (
-                Settings {
-                    source_lang: source_lang.unwrap_or(lane.settings.source_lang),
-                    target_lang: target_lang.unwrap_or(lane.settings.target_lang),
-                    my_lang: my_lang.unwrap_or(lane.settings.my_lang),
-                    other_lang: other_lang.unwrap_or(lane.settings.other_lang),
-                    ..lane.settings.clone()
-                },
-                lane.settings.asr_language(),
-            )
+            let mut candidate = settings_with_persisted_microphone(&lane.settings);
+            candidate.source_lang = source_lang.unwrap_or(lane.settings.source_lang);
+            candidate.target_lang = target_lang.unwrap_or(lane.settings.target_lang);
+            candidate.my_lang = my_lang.unwrap_or(lane.settings.my_lang);
+            candidate.other_lang = other_lang.unwrap_or(lane.settings.other_lang);
+            (candidate, lane.settings.asr_language())
         };
         save(&app, &candidate)?;
 
@@ -677,8 +758,10 @@ pub mod mac {
             let Some(lane) = g.as_mut() else {
                 return Err("not ready".into());
             };
-            lane.settings.excluded_apps.remove(&bundle_id);
-            lane.settings.clone()
+            let mut candidate = settings_with_persisted_microphone(&lane.settings);
+            candidate.excluded_apps.remove(&bundle_id);
+            lane.settings = candidate.clone();
+            candidate
         };
         save(&app, &settings)
     }
@@ -694,7 +777,7 @@ pub mod mac {
             let Some(lane) = g.as_ref() else {
                 return Err("not ready".into());
             };
-            let mut next = lane.settings.clone();
+            let mut next = settings_with_persisted_microphone(&lane.settings);
             next.exclude_app(&bundle_id);
             next
         };

@@ -595,6 +595,11 @@ export const STRINGS = {
     meetingMicOnly: "Detect by microphone alone",
     meetingMicOnlyHint:
       "Off by default. When on, sustained mic use can offer notes even without a meeting window in front.",
+    meetingMicrophone: "Meeting microphone",
+    meetingMicrophoneHint:
+      "Used for your next meeting. If it disconnects, SHOGUN keeps typed notes and never switches to another input.",
+    meetingMicrophoneAmbiguous: "ambiguous",
+    meetingMicrophoneSaveFailed: "Couldn't save that meeting microphone. Keeping the previous input.",
     deepgramAsrKey: "Speech provider key",
     deepgramAsrHint: "Powers live transcription. Paste once — stored in Keychain on this Mac.",
     deepgramAsrPresent: "Connected — live transcription can run.",

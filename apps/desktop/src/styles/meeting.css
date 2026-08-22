@@ -383,6 +383,23 @@
   width: max-content;
   z-index: 6;
 }
+.ov__audio-error {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  width: min(320px, 88vw);
+  margin: 0;
+  padding: 8px 10px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 99, 99, 0.45);
+  border-radius: 8px;
+  background: rgba(48, 16, 16, 0.96);
+  color: #ffd4d4;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+}
 /* Dead-center on top edge; mostly above so it does not cover More/CC. */
 .ov__bar-wrap > .ov__bar-move {
   position: absolute !important;

@@ -8,6 +8,7 @@ use crate::visual_recall_api::{is_structured_read, render_structured};
 use crate::voice_dictionary_api::{
     parse_term, render as render_voice_dictionary, VoiceDictionaryOperation,
 };
+use crate::meeting_microphone_api;
 
 use super::{route, RestRequest, Routed};
 
@@ -153,6 +154,7 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     backend: &B,
 ) -> (u16, String) {
     match route(req, tokens, ent) {
+        Routed::Read { tool: Tool::MeetingMicrophoneGet, .. } => (200, meeting_microphone_api::get()),
         Routed::Read {
             tool: Tool::VoiceDictionaryList,
             ..
@@ -186,6 +188,12 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
             }
         }
         Routed::Write { tool, level } => {
+            if tool == Tool::MeetingMicrophoneSet {
+                return match meeting_microphone_api::set(req.body.as_deref().unwrap_or("")) {
+                    Ok(value) => (202, value),
+                    Err(_) => (400, r#"{"error":"meeting_microphone_request_failed"}"#.to_string()),
+                };
+            }
             let voice_operation = match tool {
                 Tool::VoiceDictionaryCreate => parse_term(req.body.as_deref().unwrap_or(""))
                     .map(VoiceDictionaryOperation::Create),

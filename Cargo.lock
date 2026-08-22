@@ -4254,6 +4254,7 @@ version = "0.1.0"
 name = "shogun-cli"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "shogun-agents",
  "shogun-core",
  "shogun-mcp",

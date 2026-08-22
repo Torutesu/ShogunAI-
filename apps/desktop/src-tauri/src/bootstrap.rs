@@ -50,6 +50,8 @@ pub fn run() {
             meeting::mac::get_meeting_settings,
             meeting::mac::set_meeting_enabled,
             meeting::mac::set_meeting_allow_mic_only,
+            meeting::mac::get_meeting_microphones,
+            meeting::mac::set_meeting_microphone,
             meeting::mac::set_meeting_mode,
             meeting::mac::set_meeting_langs,
             meeting::mac::meeting_overlay_dismiss,
