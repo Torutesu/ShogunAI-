@@ -1,0 +1,76 @@
+---
+title: "CLI"
+description: "The shogun command — every read and write from a shell."
+---
+
+```bash
+shogun [--token <t>] <command>
+```
+
+Output is the server's JSON, exactly as received. The token comes from
+`--token` or the `SHOGUN_API_TOKEN` environment variable.
+
+## Reads
+
+| Command | |
+|---|---|
+| `search <query>` | Hybrid memory search |
+| `context` | Current context cache |
+| `pack <query>` | Grounded context pack — facts plus evidence with provenance |
+| `people list \| get <id>` | People state |
+| `projects list \| get <id>` | Projects state |
+| `commitments list \| get <id>` | Commitments state |
+| `open-loops list \| get <id>` | Open loops state |
+| `wrap` | Today's evening wrap: outcome, still open, tomorrow |
+| `whoami` | Profile and a compact work summary |
+| `onboarding` | This device's first-run state |
+| `metrics` | In-product SLO snapshot and lesson counters |
+| `api status` | The port the local REST server is on |
+
+Reads drop results below 0.5 confidence. Pass `--include-low` to keep them.
+
+## Writes
+
+| Command | Level | |
+|---|---|---|
+| `note <text>` | L1 | Append a user note |
+| `profile set <json>` | L1 | Update profile preferences |
+| `lessons enable \| disable <id>` | L1 | Switch a learned lesson |
+| `propose <description>` | L2 | Propose a state change |
+| `run <agent>` | per action | Launch a preset agent |
+| `actions poll <id>` | — | Poll an L3 approval |
+
+## Lessons
+
+```bash
+shogun lessons list [--for-generation] [--app ID] [--person ID] [--project ID]
+```
+
+`--for-generation` returns the lookup form used when producing output.
+
+## Visual recall
+
+```bash
+shogun visual-recall status
+shogun visual-recall enable
+shogun visual-recall disable          # off, and purge auto-captured frames
+shogun visual-recall retention <days> # 1–3650
+shogun visual-recall search <q> [--from-ms N] [--to-ms N]
+shogun visual-recall frame get <id>       # metadata + OCR text
+shogun visual-recall frame rescan <id>    # re-OCR a stored frame
+shogun visual-recall frame delete <id>
+```
+
+## Voice dictionary
+
+```bash
+shogun voice-dictionary list | create | update | delete
+```
+
+## Config
+
+```bash
+shogun config path       # where Shougun.md is
+shogun config show       # the parsed config
+shogun config validate
+```

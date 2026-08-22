@@ -1,0 +1,69 @@
+---
+title: "Quickstart"
+description: "From download to your first grounded answer."
+---
+
+## 1. Install
+
+Download SHOGUN from [syogun.com](https://syogun.com), move it to
+`/Applications`, and open it. Builds are signed with a Developer ID and
+notarized; SHOGUN is not distributed through the App Store, and it updates
+itself in place.
+
+<Note>
+  macOS 14 Sonoma or later, Apple Silicon only.
+</Note>
+
+## 2. Grant one permission
+
+Onboarding asks for **Accessibility**. That single permission is what lets
+SHOGUN read the text of the window you are working in. Grant it in
+**System Settings → Privacy & Security → Accessibility**; the onboarding card
+turns green on its own the moment you do, and names the app it is reading.
+
+SHOGUN keeps working without it — search, notes and the notch panel still run —
+but there is nothing passive to remember, so context stays thin.
+
+Some contexts are excluded permanently and are not settings you can turn off:
+password managers, authentication dialogs, terminals, and private browsing
+windows.
+
+## 3. Pick a plan
+
+Every install starts with a **7-day trial** at Pro capability. After that:
+
+| | Standard | Pro |
+|---|---|---|
+| Capture, memory, search, notch UI | Yes | Yes |
+| Read-only integrations, Dream Cycle, Morning Brief | Yes | Yes |
+| Meeting notes | Yes | Yes |
+| Agent execution (L1/L2/L3) | — | Yes |
+| Memory API (MCP / CLI / REST) | — | Yes |
+| Second-layer integrations, sending | — | Yes |
+
+Standard runs on our keys — you do not bring an API key. Pro runs agent
+inference on **your** credentials: either a subscription you already pay for
+(the vendor's own CLI, launched locally) or your own API key.
+
+## 4. Connect what you work in
+
+Connect the sources you actually live in. Reading requires an explicit opt-in
+with three disclosures; sending is always a separate, explicit confirmation and
+stays draft-only until you turn that off yourself.
+
+## 5. Open the notch
+
+Move the pointer to the notch. The panel drops with the context SHOGUN already
+assembled — it is preassembled continuously, never collected on the click — and
+offers the actions that fit what is on screen.
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="How memory works" icon="database" href="/concepts/memory">
+    Three tiers, state tables, provenance.
+  </Card>
+  <Card title="Turn on the Memory API" icon="terminal" href="/memory-api/overview">
+    Same memory from Claude, Cursor, the CLI, or REST.
+  </Card>
+</CardGroup>

@@ -1,0 +1,95 @@
+---
+title: "MCP"
+description: "Give an AI client your working memory over stdio."
+---
+
+`shogun-mcp` is a stdio MCP server. Point any MCP client at the binary with
+three environment variables and it can read your memory and propose work under
+the same permission model as the app.
+
+<Note>
+  Enable the Memory API and issue a token first — see
+  [Overview](/memory-api/overview).
+</Note>
+
+## Build
+
+```bash
+cargo build -p shogun-core --features db --bin shogun-mcp --release
+# binary: target/release/shogun-mcp
+```
+
+## Configure a client
+
+<CodeGroup>
+```json Cursor — mcp.json
+{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/target/release/shogun-mcp",
+      "args": [],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory.db",
+        "SHOGUN_MEMORY_API_SETTINGS": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory_api.json",
+        "SHOGUN_API_TOKEN": "shogun_PASTE_ISSUED_TOKEN"
+      }
+    }
+  }
+}
+```
+
+```json Claude Desktop — claude_desktop_config.json
+{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/target/release/shogun-mcp",
+      "args": [],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory.db",
+        "SHOGUN_MEMORY_API_SETTINGS": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory_api.json",
+        "SHOGUN_API_TOKEN": "shogun_PASTE_ISSUED_TOKEN"
+      }
+    }
+  }
+}
+```
+</CodeGroup>
+
+Claude Desktop's config lives at
+`~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+## Which tool, when
+
+| Tool | Reach for it when |
+|---|---|
+| `profile.whoami` | Starting a session. Identity and a compact summary — not a search. |
+| `memory.get_context` | You want the current work snapshot from the database. |
+| `memory.get_context_pack` | The answer must be grounded: facts arrive with their evidence. |
+| `memory.search` | There is a specific keyword or question to look up. |
+| `memory.append_note` | Recording something the user said (L1). |
+| `actions.execute` | Running an action. A send returns `{ pending, approval_id }`. |
+
+<Warning>
+  A standalone MCP process reads the database. The live capture cache behind
+  the notch is not available to it, so `memory.get_context` is the
+  database-derived snapshot rather than what is on screen this second.
+</Warning>
+
+## Smoke check
+
+<Steps>
+  <Step title="Enable and issue">
+    Turn on the Memory API and issue a token in Settings.
+  </Step>
+  <Step title="Wire the client">
+    Add the config above with the three environment variables, and restart it.
+  </Step>
+  <Step title="Call three tools">
+    In the client's chat: `profile.whoami`, then `memory.get_context`, then
+    `memory.append_note` with a short note.
+  </Step>
+  <Step title="Prove it fails closed">
+    Turn the Memory API off, restart the client. The process must refuse to
+    start and say so on stderr.
+  </Step>
+</Steps>

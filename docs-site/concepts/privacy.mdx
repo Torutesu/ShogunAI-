@@ -1,0 +1,83 @@
+---
+title: "Privacy"
+description: "Where your data lives, what crosses the boundary, and what never does."
+---
+
+SHOGUN is local-first: the center of gravity is the Rust core on your Mac. This
+page states the boundary precisely, including its exceptions.
+
+## What is never stored
+
+- **No screenshots and no screen recordings.** Screen capture is text, read
+  through the Accessibility API.
+- **No audio files.** SHOGUN does not write meeting audio to disk or to a
+  temporary file. What persists is the transcript text and its provenance.
+- **No secrets outside the Keychain.** API keys and OAuth tokens are never
+  written to a file, the database, or a log. Settings show only the last four
+  characters of a stored key.
+
+The local database is encrypted, and its key lives in the Keychain.
+
+## What is stored locally
+
+| Data | Local database | Keychain |
+|---|---|---|
+| Screen text from the Accessibility API | Yes | — |
+| Meeting transcript text | Yes | — |
+| Metadata: app, window title, timestamp, dwell | Yes | — |
+| Extracted state, each row with provenance and confidence | Yes | — |
+| API keys, OAuth tokens | Never | Only here |
+
+## What crosses the boundary
+
+Raw data does not leave the device. What goes out is the chunk a model needs to
+answer the request in front of you, and **every** outbound call is recorded in
+the traceability log — a digest and flags, never the content itself. You can
+read that log in the app.
+
+These run entirely on device and send nothing:
+
+- Capture and redaction before the write
+- Local full-text and vector search
+- Embedding generation, using the bundled model
+- The three memory tiers and the state tables
+
+### Named exceptions
+
+Two paths cross the boundary by design. Both are disclosed in the app.
+
+<AccordionGroup>
+  <Accordion title="Mail, through a connector">
+    Reading and sending mail runs through a third-party integration layer,
+    which means message content passes a third party. Using it requires an
+    explicit opt-in with three disclosures; without that consent nothing
+    syncs and nothing sends. Reads are recorded in the traceability log too,
+    and the log marks the third-party hop as such.
+  </Accordion>
+  <Accordion title="Meeting transcription">
+    Live meeting transcription uses a cloud speech service: audio is streamed
+    for transcription only, and is never used to train or improve any model.
+    SHOGUN still writes no waveform to disk. The in-app disclosure names the
+    path before you use it.
+  </Accordion>
+</AccordionGroup>
+
+## Model training
+
+**Your data is not used to train our models.** For the providers SHOGUN sends
+prompts to, inputs and outputs are not used for training under their commercial
+terms by default; providers may retain data briefly for abuse monitoring. Where
+a provider offers a training opt-out, SHOGUN sets it.
+
+## Excluded by construction
+
+Password managers, authentication dialogs, terminals and private browsing
+windows are never captured. This is not a setting, so it cannot be turned off —
+by you, or by anything acting on your behalf.
+
+## Analytics
+
+Anonymous product analytics are on by default and can be turned off in
+onboarding or in **Settings → Privacy & Security** — both write the same
+switch. Events carry feature counts only: never captured text, personal data,
+or keys.

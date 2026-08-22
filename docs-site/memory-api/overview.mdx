@@ -1,0 +1,87 @@
+---
+title: "Overview"
+description: "Three faces on one memory: MCP, CLI, and local REST."
+---
+
+Anything you can do in the app, you can do from an API — that symmetry is a
+design rule, not a roadmap item. The same permission levels apply to both:
+an agent calling `actions.execute` hits the same L3 confirmation you do.
+
+<CardGroup cols={3}>
+  <Card title="MCP" icon="plug" href="/memory-api/mcp">
+    For AI clients. Stdio server, one binary.
+  </Card>
+  <Card title="CLI" icon="terminal" href="/memory-api/cli">
+    `shogun` — every read and write from a shell.
+  </Card>
+  <Card title="REST" icon="server" href="/memory-api/rest">
+    Loopback HTTP for scripts and local tools.
+  </Card>
+</CardGroup>
+
+<Note>
+  The Memory API is a Pro capability, and the trial is Pro-equivalent.
+</Note>
+
+## Enable it
+
+The API is off until you turn it on, and it fails closed: with the setting
+absent or false, `shogun-mcp` and `shogun-api` exit non-zero with a clear
+message on stderr rather than serving anything.
+
+<Steps>
+  <Step title="Turn it on">
+    **Settings → Memory API → On.**
+  </Step>
+  <Step title="Issue a token">
+    **Settings → Memory API → Issue.** The token is shown once — copy it.
+
+    Once any token exists, a matching `SHOGUN_API_TOKEN` is required. Before
+    the first one, local process trust is accepted so you can try things out.
+  </Step>
+</Steps>
+
+## Where things live
+
+On macOS, the app keeps memory under its application-support directory:
+
+```text
+~/Library/Application Support/com.selectkk.shogun/
+  memory.db            # the encrypted memory database
+  memory_api.json      # enable flag + profile
+  l3_approvals.json    # the shared approval queue
+  visual_recall.json
+```
+
+Standalone binaries read `SHOGUN_DB_PATH` (default `./shogun.db`). Settings
+resolve from `SHOGUN_MEMORY_API_SETTINGS` if set, otherwise
+`memory_api.json` beside the database. Approvals resolve from
+`SHOGUN_L3_APPROVALS`, otherwise `l3_approvals.json` beside the database.
+
+## Tools
+
+| Tool | Level | What it is for |
+|---|---|---|
+| `profile.whoami` | read | Session start: identity, preferences, a compact work summary |
+| `memory.get_context` | read | The current work snapshot from the database |
+| `memory.get_context_pack` | read | Grounded pack: facts plus evidence with provenance |
+| `memory.search` | read | Hybrid search over events and notes |
+| `memory.get_wrap` | read | Today's evening wrap |
+| `state.people.*` / `projects.*` / `commitments.*` / `open_loops.*` | read | List or get state records |
+| `lessons.list` | read | Learned lessons |
+| `visual_recall.*` | read / L1 | Status, retention, frame search and deletion |
+| `voice_dictionary.*` | read / L1 | Local vocabulary |
+| `memory.append_note` | L1 | Append a note |
+| `profile.set` | L1 | Update display name, role, preferences |
+| `lessons.set_active` | L1 | Switch a learned lesson on or off |
+| `state.propose_update` | L2 | Propose a change to state |
+| `actions.execute` | per action | Run an action; sends return `pending` |
+| `actions.status` | read | Poll an approval |
+
+Reads exclude results below 0.5 confidence unless you ask for them.
+
+## Build the binaries
+
+```bash
+cargo build -p shogun-core --features db --bin shogun-mcp --release
+```

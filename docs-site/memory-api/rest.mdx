@@ -1,0 +1,89 @@
+---
+title: "REST"
+description: "Loopback HTTP over the same memory, the same levels."
+---
+
+`shogun-api` serves the Memory API on loopback. Find the port with
+`shogun api status`; authenticate with a bearer token.
+
+```bash
+export SHOGUN_API_TOKEN=shogun_...
+export SHOGUN_PORT=$(shogun api status | jq -r .port)
+
+curl -s -H "Authorization: Bearer $SHOGUN_API_TOKEN" \
+  "http://127.0.0.1:$SHOGUN_PORT/v1/memory/search?q=quarterly+review"
+```
+
+Writes are `POST` with a JSON body. Reads return the same JSON the other two
+faces return.
+
+## Status and health
+
+| Method | Path | |
+|---|---|---|
+| `GET` | `/v1/status` | Server status |
+| `GET` | `/v1/metrics` | SLO snapshot and lesson counters |
+| `GET` | `/v1/device/onboarding` | This device's first-run state |
+
+## Memory
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/memory/search` | read | Hybrid search — `?q=` |
+| `GET` | `/v1/memory/context` | read | Current context |
+| `GET` | `/v1/memory/context_pack` | read | Grounded pack — `?q=` carries the task |
+| `GET` | `/v1/memory/wrap` | read | Today's evening wrap |
+| `POST` | `/v1/memory/notes` | L1 | Append a note |
+
+## State
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/state/{noun}` | read | List — `people`, `projects`, `commitments`, `open_loops` |
+| `GET` | `/v1/state/{noun}/{id}` | read | Get one record |
+| `POST` | `/v1/state/proposals` | L2 | Propose a state change |
+
+## Profile
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/profile/whoami` | read | Identity and work summary |
+| `POST` | `/v1/profile` | L1 | Update display name, role, preferences |
+
+## Actions
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `POST` | `/v1/actions/execute` | per action | Run an action |
+| `GET` | `/v1/actions/status/{id}` | read | Poll an approval |
+
+A send returns `{ pending, approval_id }` and waits in **Settings → Approvals**
+until you confirm it there.
+
+## Lessons
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/lessons` | read | All lessons |
+| `POST` | `/v1/lessons/active` | L1 | Switch one on or off |
+
+## Visual recall
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/visual_recall/status` | read | Status and frame stats |
+| `POST` | `/v1/visual_recall/enabled` | L1 | On or off |
+| `POST` | `/v1/visual_recall/retention` | L1 | Retention, 1–3650 days |
+| `GET` | `/v1/visual_recall/frames/search` | read | Search stored frames |
+| `GET` | `/v1/visual_recall/frames/{id}` | read | Frame metadata and OCR text |
+| `POST` | `/v1/visual_recall/frames/{id}/rescan` | read | Re-OCR a stored frame |
+| `POST` | `/v1/visual_recall/frames/delete` | L1 | Delete frames |
+
+## Voice dictionary
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/voice_dictionary/terms` | read | List terms |
+| `POST` | `/v1/voice_dictionary/terms` | L1 | Create a term |
+| `POST` | `/v1/voice_dictionary/terms/{id}` | L1 | Update a term |
+| `POST` | `/v1/voice_dictionary/terms/{id}/delete` | L1 | Delete a term |

@@ -1,0 +1,59 @@
+---
+title: "Memory"
+description: "What SHOGUN captures, how it is stored, and what it is allowed to claim."
+---
+
+## Capture
+
+SHOGUN reads the focused window through the macOS Accessibility API. It takes
+**text**, not pixels: no screenshots, no screen recording, no audio files. The
+capture daemon runs continuously and is built not to fall over — a failure
+surfaces as a color on the notch indicator rather than an interruption.
+
+## Three tiers
+
+| Tier | Window | Where |
+|---|---|---|
+| Hot | Last 24 hours | RAM |
+| Warm | 30 days | Local database |
+| Cold | Full history | Local database, quantized and partitioned by period |
+
+Ordinary vector search runs against the Warm tier. Cold history stays
+searchable, but it is not swept on every query.
+
+Embeddings are computed by a multilingual ONNX model bundled with the app. No
+text is sent to an embedding API, which is also why search keeps working
+offline and costs nothing per query.
+
+## Events and state
+
+The event log is what happened. **State** is what is true because of it, kept
+in four tables:
+
+- `people`
+- `projects`
+- `commitments`
+- `open_loops`
+
+Every state record carries two things that are not optional: a **provenance**
+reference to the events that produced it, and a **confidence** score. A
+low-confidence fact is never handed to an agent as established — it is passed
+as a possibility or not at all. That is the rule that keeps generated output
+from quietly inventing your work.
+
+## Search
+
+Search is hybrid: full-text over the trigram index plus vector similarity, with
+the local budget of 500 ms. Reads exclude results below 0.5 confidence unless
+you ask for them explicitly (`--include-low` on the CLI).
+
+## Visual recall
+
+Visual recall is **off** by default. When you turn it on, screens captured for
+OCR are held as compressed JPEGs inside an encrypted local store for a
+retention window you pick — presets from 1 to 7 days, custom up to 3,650, and
+3 days if you never choose. Expiry deletion always runs; there is no setting
+that disables it. Frames never leave the device, audio is never included, and
+with visual recall off not a single image is stored.
+
+See [Privacy](/concepts/privacy) for the full boundary.

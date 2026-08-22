@@ -1,0 +1,51 @@
+---
+title: "SHOGUN"
+sidebarTitle: "Introduction"
+description: "The operating system for the AI-native individual. Memory that captures your day. Execution that acts on it."
+---
+
+SHOGUN runs on your Mac and builds a working model of what you do. It reads
+your screen through the macOS Accessibility API — text, not screenshots — keeps
+that memory local, and gives agents enough context to finish work instead of
+describing it.
+
+Two layers, one product:
+
+<CardGroup cols={2}>
+  <Card title="Memory Layer" icon="database" href="/concepts/memory">
+    Passive capture, local storage, hybrid search. People, projects,
+    commitments and open loops are kept as state, each with provenance and a
+    confidence score.
+  </Card>
+  <Card title="Execution Layer" icon="bolt" href="/concepts/agents">
+    Agents that act on that memory under a three-level permission model.
+    Anything that leaves your Mac needs an explicit confirmation.
+  </Card>
+</CardGroup>
+
+## Where to start
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install, grant permissions, and get your first context card.
+  </Card>
+  <Card title="Memory API" icon="terminal" href="/memory-api/overview">
+    Reach the same memory from MCP clients, the CLI, or local REST.
+  </Card>
+</CardGroup>
+
+## What SHOGUN is not
+
+- **Not a recorder.** No screenshots, no screen recordings, no audio files on
+  disk. Visual recall is opt-in and stores encrypted frames for a retention
+  window you choose.
+- **Not a note app.** Memory is a means to execution, not the deliverable.
+- **Not cloud-first.** Capture, storage, search and embeddings run on device.
+
+## Requirements
+
+| | |
+|---|---|
+| macOS | 14 Sonoma or later |
+| Hardware | Apple Silicon (arm64) |
+| Display | Any Mac — non-notch and external displays get a menu-bar panel |

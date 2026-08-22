@@ -1,0 +1,63 @@
+---
+title: "Agents and permissions"
+description: "L1, L2, L3 — what an agent may do without asking, and what it may never do without you."
+---
+
+Execution is governed by three levels. The level belongs to the **action**, not
+to the caller: an action reached from the notch, from an MCP client, or from
+the CLI is checked the same way.
+
+<CardGroup cols={3}>
+  <Card title="L1 — automatic" icon="circle-check">
+    Runs without asking. Local and reversible: append a note, update a
+    preference, toggle a local setting.
+  </Card>
+  <Card title="L2 — proposed" icon="circle-half-stroke">
+    SHOGUN proposes a change to state and you accept it. Nothing leaves the
+    device.
+  </Card>
+  <Card title="L3 — confirmed" icon="shield-check">
+    Anything outward-facing. Sending mail, posting, creating calendar events.
+    Always an explicit confirmation.
+  </Card>
+</CardGroup>
+
+<Warning>
+  No outbound action is ever L1. Sending, posting and calendar writes are L3 by
+  construction — there is no configuration that promotes them.
+</Warning>
+
+## How an L3 confirmation works
+
+An L3 call does not send. It returns `{ pending, approval_id }` and the request
+appears in **Settings → Approvals**. You confirm it there with the dedicated
+button; pressing Enter alone never sends. Agents can poll the outcome:
+
+<CodeGroup>
+```bash CLI
+shogun actions poll <approval_id>
+```
+
+```bash REST
+curl -H "Authorization: Bearer $SHOGUN_API_TOKEN" \
+  http://127.0.0.1:$PORT/v1/actions/status/<approval_id>
+```
+</CodeGroup>
+
+The approval queue is shared: an action proposed by an MCP client is confirmed
+in the same place as one proposed by the app.
+
+## Sending stays draft-first
+
+For integrations that can send, **draft-stop is on by default**. Agents produce
+a draft and stop there. Turning it off is a deliberate choice you make after
+consenting to the integration, and even then sending remains L3.
+
+## Which credentials run what
+
+| Lane | Runs on |
+|---|---|
+| Indexing, classification, background summaries | Our keys, batch |
+| Agent inference, chat, drafting | Your subscription or your API key |
+
+The two never swap. Background work does not burn your monthly plan credits.

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "SHOGUN",
+  "description": "SHOGUN is the operating system for the AI-native individual. Memory that captures your day. Execution that acts on it.",
+  "colors": {
+    "primary": "#004CFC",
+    "light": "#6E9BFF",
+    "dark": "#2F63F0"
+  },
+  "favicon": "/favicon.png",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://syogun.com"
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/memory",
+              "concepts/agents",
+              "concepts/privacy"
+            ]
+          },
+          {
+            "group": "Memory API",
+            "pages": [
+              "memory-api/overview",
+              "memory-api/mcp",
+              "memory-api/cli",
+              "memory-api/rest"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Support",
+        "href": "mailto:support@syogun.com"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get SHOGUN",
+      "href": "https://syogun.com"
+    }
+  },
+  "footer": {
+    "socials": {
+      "website": "https://syogun.com",
+      "github": "https://github.com/Torutesu/ShogunAI-"
+    }
+  }
+}
