@@ -692,11 +692,11 @@ export function MeetingOverlay(): JSX.Element | null {
     call("set_meeting_langs", { [field]: lang });
   };
 
-  const openVoiceSettings = (): void => {
+  const openSettings = (section: "voice" | "controls"): void => {
     setMoreOpen(false);
     setMorePage("root");
     setMicrophonePickerOpen(false);
-    void emit("meeting_open_settings", { section: "voice" }).catch(() => undefined);
+    void emit("meeting_open_settings", { section }).catch(() => undefined);
   };
 
   const toggleMicrophonePicker = (): void => {
@@ -1295,7 +1295,7 @@ export function MeetingOverlay(): JSX.Element | null {
                       />
                     </label>
                     <div className="ov__more-rule" />
-                    <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
+                    <button type="button" className="ov__more-row" onClick={() => openSettings("voice")}>
                       <IconBookOpen className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreDictionary}</span><b>›</b>
                     </button>
@@ -1303,7 +1303,7 @@ export function MeetingOverlay(): JSX.Element | null {
                       <IconGlobe className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreLanguage}</span><em>{modeLabel(settings.meeting_mode)}</em><b>›</b>
                     </button>
-                    <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
+                    <button type="button" className="ov__more-row" onClick={() => openSettings("controls")}>
                       <IconKeyboard className="ov__more-icon" size={16} />
                       <span>{t.meetingMoreShortcuts}</span><b>›</b>
                     </button>
@@ -1346,10 +1346,10 @@ export function MeetingOverlay(): JSX.Element | null {
                         {microphoneError ? <p className="ov__more-picker-error">{microphoneError}</p> : null}
                       </div>
                     ) : null}
-                    <button type="button" className="ov__more-row" onClick={openVoiceSettings}>
+                    <div className="ov__more-row ov__more-row--status">
                       <IconVolume2 className="ov__more-icon" size={16} />
-                      <span>{t.meetingMoreSystemAudio}</span><em>{t.meetingMoreAutomatic}</em><b>›</b>
-                    </button>
+                      <span>{t.meetingMoreSystemAudio}</span><em>{t.meetingMoreAutomatic}</em>
+                    </div>
                   </>
                 ) : (
                   <>
