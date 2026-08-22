@@ -1,12 +1,43 @@
 // The mark's motion is CSS (styles/logo-motion.css) keyed off classes the component puts on the
 // facets. jsdom applies no stylesheet, so what is worth pinning here is the contract between the
 // two: the part classes the fold rules hinge on, and the mode class that turns them on.
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AnimatedLogo, Logo } from "./Logo";
 
-afterEach(cleanup);
+/* The refold runs on rAF against a real clock, so the tests drive both. */
+let now = 0;
+let queued: FrameRequestCallback[] = [];
+
+beforeEach(() => {
+  now = 0;
+  queued = [];
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => queued.push(cb));
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+/** Run the tween out. 60ms a frame clears any duration this component uses well inside the cap. */
+function settle(): void {
+  for (let i = 0; i < 100 && queued.length > 0; i += 1) {
+    const batch = queued;
+    queued = [];
+    now += 60;
+    act(() => batch.forEach((cb) => cb(now)));
+  }
+}
+
+/** Every path drawing `part`, on both halves of the mark. */
+function drawn(root: HTMLElement, part: string): (string | null)[] {
+  return [...root.querySelectorAll(`.shogun-mark__facet--${part}`)].map((p) => p.getAttribute("d"));
+}
 
 /** Both halves of the mark, so the mirror is covered too: three facets each. */
 function facets(root: HTMLElement, part: string): Element[] {
@@ -58,5 +89,57 @@ describe("the mark", () => {
     const svg = container.querySelector("svg");
     expect(svg?.getAttribute("role")).toBe("img");
     expect(svg?.getAttribute("aria-label")).toBe("ShogunAI");
+  });
+
+  it("draws the kabuto's own vertices until something asks it not to", () => {
+    const { container } = render(<Logo />);
+    expect(drawn(container, "peak")[0]).toBe("M296 254L469 0L469 525Z");
+    expect(drawn(container, "wing")[0]).toBe("M0 101L276 264L446 524L176 390Z");
+    expect(drawn(container, "blade")[0]).toBe("M62 613L171 413L331 493Z");
+  });
+});
+
+describe("the refold", () => {
+  it("carries the mark all the way to the heart, both halves in step", () => {
+    const { container } = render(<AnimatedLogo motion="static" morphTo="heart" />);
+    const svg = container.querySelector("svg") as SVGSVGElement;
+
+    fireEvent.pointerOver(svg, { relatedTarget: document.body });
+    settle();
+
+    expect(drawn(container, "peak")).toEqual(["M368 50L469 252L469 690Z", "M368 50L469 252L469 690Z"]);
+    expect(drawn(container, "wing")[0]).toBe("M72 160L368 50L469 690L50 332Z");
+    expect(drawn(container, "blade")[0]).toBe("M72 160L200 -8L368 50Z");
+  });
+
+  it("comes back to the mark when the pointer leaves", () => {
+    const { container } = render(<AnimatedLogo motion="static" morphTo="heart" />);
+    const svg = container.querySelector("svg") as SVGSVGElement;
+
+    fireEvent.pointerOver(svg, { relatedTarget: document.body });
+    settle();
+    fireEvent.pointerOut(svg, { relatedTarget: document.body });
+    settle();
+
+    expect(drawn(container, "peak")[0]).toBe("M296 254L469 0L469 525Z");
+  });
+
+  it("leaves the sheet alone when the viewer asked for less motion", () => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (q: string) => ({ matches: q.includes("reduced-motion") }) as MediaQueryList,
+    );
+    const { container } = render(<AnimatedLogo motion="static" morphTo="heart" />);
+    const svg = container.querySelector("svg") as SVGSVGElement;
+
+    fireEvent.pointerOver(svg, { relatedTarget: document.body });
+    settle();
+
+    expect(drawn(container, "peak")[0]).toBe("M296 254L469 0L469 525Z");
+  });
+
+  it("takes over the pointer from the hover fold rather than stacking with it", () => {
+    const { container } = render(<AnimatedLogo interactive morphTo="heart" />);
+    const cls = container.querySelector("svg")?.getAttribute("class") ?? "";
+    expect(cls).not.toContain("shogun-mark--interactive");
   });
 });

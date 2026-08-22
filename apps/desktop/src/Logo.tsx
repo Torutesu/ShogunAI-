@@ -10,27 +10,75 @@
 // Self-contained rather than importing from apps/website: that package is a separate workspace
 // with its own build, and the desktop app must not depend on it.
 
+import { useCallback, useEffect, useRef } from "react";
+import type { JSX } from "react";
+
+/** Which fold each facet is. Rides along as a class so styles/logo-motion.css can turn each one
+ *  about its own crease, and so the morph below can find its pair on both halves. */
+const PARTS = ["peak", "wing", "blade"] as const;
+
+type Point = readonly [number, number];
+type Polygon = readonly Point[];
+
 /** Left half of the mark in its own 957x614 space. The right half is this mirrored, so the two
  *  sides cannot drift apart under editing — and the source artwork's own 3px asymmetry in the
  *  wing is resolved in favour of true symmetry.
  *
- *  `part` names which fold each facet is, and rides along as a class so styles/logo-motion.css can
- *  turn it about its own crease. It costs the static mark nothing: the classes carry an origin and
- *  no transform until a motion class is present. */
-const FACETS = [
-  { part: "peak", d: "M296 254 L469 0 L469 525 Z" }, // centre peak
-  { part: "wing", d: "M0 101 L276 264 L446 524 L176 390 Z" }, // wing
-  { part: "blade", d: "M62 613 L171 413 L331 493 Z" }, // blade
-] as const;
+ *  Held as points rather than path text only so a second shape can be interpolated against it;
+ *  the vertices are exactly the ones the app icon and the marketing site draw. */
+const KABUTO: readonly Polygon[] = [
+  [[296, 254], [469, 0], [469, 525]], // centre peak
+  [[0, 101], [276, 264], [446, 524], [176, 390]], // wing
+  [[62, 613], [171, 413], [331, 493]], // blade
+];
+
+/**
+ * The same sheet, refolded into a heart.
+ *
+ * Not a heart drawn from scratch and cross-faded to: the same three facets, the same vertex counts,
+ * in the same order, so every point has somewhere to travel and the facets stay welded to each
+ * other the whole way across. Six of the ten points sit on the silhouette — notch, inner shoulder,
+ * lobe, outer edge, waist, and the bottom point — which is what lets a lobe read as a curve rather
+ * than one flat diagonal.
+ *
+ * The two centre-line points stay at x=469, so the mirror leaves the same 19-unit crease down the
+ * middle that the kabuto has. It is the only seam in the heart: wider gaps between the facets were
+ * tried and they shatter the shape rather than folding it.
+ */
+const HEART: readonly Polygon[] = [
+  [[368, 50], [469, 252], [469, 690]], // peak → the inner wedge, notch down to the point
+  [[72, 160], [368, 50], [469, 690], [50, 332]], // wing → the body of the lobe
+  [[72, 160], [200, -8], [368, 50]], // blade → the cap of the lobe
+];
+
+const SHAPES = { kabuto: KABUTO, heart: HEART };
+
+/** What the sheet can refold into. `kabuto` is the mark itself — its own resting shape. */
+export type MarkShape = keyof typeof SHAPES;
 
 /** Brand blue, sampled from the artwork. Flat, not a gradient: the mark reads as folded paper,
  *  and a gradient across a facet fights the fold it is meant to describe. */
 export const MARK_BLUE = "#004CFC";
 
+function pathOf(poly: Polygon): string {
+  return `M${poly.map(([x, y]) => `${x} ${y}`).join("L")}Z`;
+}
+
+/** Facet `i` of the kabuto, `t` of the way to the same facet of `shape`. */
+function blend(shape: MarkShape, i: number, t: number): string {
+  const from = KABUTO[i];
+  const to = SHAPES[shape][i];
+  return pathOf(from.map(([x, y], j) => [x + (to[j][0] - x) * t, y + (to[j][1] - y) * t] as Point));
+}
+
 /** The mark itself, without a plate, in its native 957x614 space. */
 export function MarkFacets({ fill = MARK_BLUE }: { fill?: string }): JSX.Element {
-  const half = FACETS.map(({ part, d }) => (
-    <path key={d} className={`shogun-mark__facet shogun-mark__facet--${part}`} d={d} />
+  const half = KABUTO.map((poly, i) => (
+    <path
+      key={PARTS[i]}
+      className={`shogun-mark__facet shogun-mark__facet--${PARTS[i]}`}
+      d={pathOf(poly)}
+    />
   ));
   return (
     <g fill={fill}>
@@ -79,9 +127,78 @@ export function Logo({ size = 26, className }: { size?: number; className?: stri
  */
 export type MarkMotion = "unfold" | "idle" | "thinking" | "static";
 
+const REDUCE_MOTION = "(prefers-reduced-motion: reduce)";
+
+function prefersStillness(): boolean {
+  return window.matchMedia?.(REDUCE_MOTION)?.matches ?? false;
+}
+
 /**
- * {@link Logo}, folding. `interactive` adds a fold under the pointer, which composes with `unfold`
- * (that one hands the transform back when it finishes) but not with the two looping motions.
+ * Refolds the mark into `shape` while the pointer is over it, and back when it leaves.
+ *
+ * Imperative on purpose. React owns `d` at mount and then never writes it again — the attribute
+ * only gets patched when the prop changes, and it never does — so the tween can hold the DOM for
+ * the length of a hover without re-rendering the tree sixty times a second.
+ *
+ * Reversal picks up wherever the tween had got to and shortens itself to match, so flicking the
+ * pointer across the mark reads as the paper springing back rather than snapping.
+ */
+function useRefold(
+  svgRef: React.RefObject<SVGSVGElement>,
+  shape: MarkShape | undefined,
+): { onPointerEnter: () => void; onPointerLeave: () => void } {
+  const frame = useRef(0);
+  const at = useRef(0);
+
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+
+  const draw = useCallback(
+    (t: number) => {
+      const svg = svgRef.current;
+      if (!svg || !shape) return;
+      PARTS.forEach((part, i) => {
+        const d = blend(shape, i, t);
+        // Both halves: the mirror is a transform, so the two sides share one path string.
+        svg.querySelectorAll(`.shogun-mark__facet--${part}`).forEach((p) => p.setAttribute("d", d));
+      });
+    },
+    [shape, svgRef],
+  );
+
+  const run = useCallback(
+    (to: 0 | 1) => {
+      // A shape that changes under the pointer is decoration, and decoration is exactly what
+      // reduced motion asks for less of. Hold the mark still rather than snapping it.
+      if (!shape || prefersStillness()) return;
+      const from = at.current;
+      const span = Math.abs(to - from);
+      if (span === 0) return;
+      const ms = (to === 1 ? 420 : 340) * span;
+      const start = performance.now();
+      cancelAnimationFrame(frame.current);
+      const step = (now: number): void => {
+        const k = Math.min(1, (now - start) / ms);
+        at.current = from + (to - from) * (1 - (1 - k) ** 3); // ease-out, to match the fold's settle
+        draw(at.current);
+        if (k < 1) frame.current = requestAnimationFrame(step);
+      };
+      frame.current = requestAnimationFrame(step);
+    },
+    [draw, shape],
+  );
+
+  return { onPointerEnter: () => run(1), onPointerLeave: () => run(0) };
+}
+
+/**
+ * {@link Logo}, folding.
+ *
+ * `interactive` adds a fold under the pointer, which composes with `unfold` (that one hands the
+ * transform back when it finishes) but not with the two looping motions.
+ *
+ * `morphTo` refolds the whole mark into another shape under the pointer — `heart` is the one that
+ * exists. It replaces `interactive` rather than stacking with it: both answer the pointer, and two
+ * answers to one gesture is one too many.
  *
  * Restarting the fold is the caller's job, and React already has the verb for it: change the
  * element's `key` and the animation runs again from a fresh node.
@@ -90,28 +207,35 @@ export function AnimatedLogo({
   size = 26,
   motion = "unfold",
   interactive = false,
+  morphTo,
   className,
 }: {
   size?: number;
   motion?: MarkMotion;
   interactive?: boolean;
+  morphTo?: MarkShape;
   className?: string;
 }): JSX.Element {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const refold = useRefold(svgRef, morphTo);
+
   const classes = [
     "shogun-mark",
     motion === "static" ? null : `shogun-mark--${motion}`,
-    interactive ? "shogun-mark--interactive" : null,
+    interactive && !morphTo ? "shogun-mark--interactive" : null,
     className,
   ].filter(Boolean);
 
   return (
     <svg
+      ref={svgRef}
       width={size}
       height={size}
       viewBox="0 0 957 957"
       className={classes.join(" ")}
       role="img"
       aria-label="ShogunAI"
+      {...(morphTo ? refold : null)}
     >
       <g transform="translate(0 171.5)">
         <MarkFacets />
