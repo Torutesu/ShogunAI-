@@ -8,6 +8,7 @@
 import Stripe from 'stripe';
 
 import { INTERVALS, PLAN_IDS, priceIdFor } from './pricing';
+import { siteConfig } from './site';
 
 let cached: { key: string; client: Stripe } | null = null;
 
@@ -70,9 +71,22 @@ export function stripe(): Stripe {
   return cached.client;
 }
 
-/** Absolute origin for Checkout return URLs. */
+/**
+ * Absolute origin for Checkout and Customer Portal return URLs.
+ *
+ * Read at **runtime** from `APP_ORIGIN`, not from `NEXT_PUBLIC_APP_ORIGIN`: Next inlines
+ * `NEXT_PUBLIC_*` at build time, and the deploy workflow builds without it set, so the old
+ * localhost fallback was being compiled into the Worker — a real buyer would have been redirected
+ * to `http://localhost:3000` after paying. `NEXT_PUBLIC_APP_ORIGIN` is still honoured for local
+ * `next dev`, and the last resort is the production domain rather than localhost, so a missing
+ * variable degrades to "right for production" instead of "broken in production".
+ */
 export function appOrigin(): string {
-  return process.env.NEXT_PUBLIC_APP_ORIGIN?.trim() || 'http://localhost:3000';
+  return (
+    process.env.APP_ORIGIN?.trim() ||
+    process.env.NEXT_PUBLIC_APP_ORIGIN?.trim() ||
+    siteConfig.url
+  );
 }
 
 /**
